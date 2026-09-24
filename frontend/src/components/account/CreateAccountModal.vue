@@ -121,11 +121,29 @@
           <!-- Profile selector -->
           <div v-if="tlsFingerprintEnabled || nativeWireEnabled" class="mt-3">
             <p v-if="nativeWireEnabled" class="input-hint">Native 必须绑定与客户端版本匹配的已验证模板。</p>
-            <select v-model="tlsFingerprintProfileId" data-testid="create-native-tls-profile-select" class="input">
-              <option v-if="!nativeWireEnabled" :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
-              <option v-if="!nativeWireEnabled && tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
-              <option v-for="p in selectableTLSProfiles" :key="p.id" :value="p.id">{{ p.name }}{{ p.native_versions?.length ? ` (${p.native_versions.join(', ')})` : '' }}</option>
-            </select>
+            <Select
+              :model-value="tlsFingerprintProfileId"
+              @update:model-value="selectTLSProfile"
+              :options="tlsProfileOptions"
+              :disabled="tlsProfilesLoading || tlsProfileCreating"
+              placeholder="请选择指纹模板"
+              data-testid="create-native-tls-profile-select"
+            />
+            <p v-if="tlsProfilesLoading" class="input-hint" role="status">正在加载模板…</p>
+            <div v-else-if="tlsProfilesError" class="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">
+              <p>{{ tlsProfilesError }}</p>
+              <button type="button" class="btn btn-secondary btn-sm mt-2" @click="loadTLSProfiles">重试加载</button>
+            </div>
+            <div v-else-if="(nativeWireEnabled) && !selectableTLSProfiles.length" class="mt-2">
+              <p class="input-hint">暂无匹配的已验证模板，请先创建并选择模板后再保存。</p>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm mt-2"
+                data-testid="create-native-tls-create"
+                :disabled="tlsProfileCreating"
+                @click="createNativeTLSProfile"
+              >{{ tlsProfileCreating ? '正在创建…' : '创建并选择已验证模板' }}</button>
+            </div>
           </div>
         </div>
 
@@ -3929,6 +3947,7 @@ import {
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 import { adminAPI } from '@/api/admin'
+import { useAccountTLSProfiles } from '@/composables/useAccountTLSProfiles'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import {
   useAccountOAuth,
@@ -4649,10 +4668,10 @@ const umqModeOptions = computed(() => [
 ])
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
-const tlsFingerprintProfiles = ref<{ id: number; name: string; native_family?: string; native_versions?: string[] }[]>([])
-const selectableTLSProfiles = computed(() => nativeWireEnabled.value
-  ? tlsFingerprintProfiles.value.filter(p => p.native_family === (form.platform === 'openai' ? 'codex' : 'claude'))
-  : tlsFingerprintProfiles.value)
+const {
+  selectableTLSProfiles, tlsProfileOptions, tlsProfilesLoading, tlsProfileCreating,
+  tlsProfilesError, loadTLSProfiles, createNativeTLSProfile, selectTLSProfile
+} = useAccountTLSProfiles(() => form.platform, () => nativeWireEnabled.value, tlsFingerprintProfileId)
 const sessionIdMaskingEnabled = ref(false)
 const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
@@ -4824,9 +4843,7 @@ const canExchangeCode = computed(() => {
 const handleShowChanged = (newVal: boolean) => {
     if (newVal) {
       // Load TLS fingerprint profiles
-      adminAPI.tlsFingerprintProfiles.list()
-        .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name, native_family: p.native_family, native_versions: p.native_versions })) })
-        .catch(() => { tlsFingerprintProfiles.value = [] })
+      loadTLSProfiles()
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
       // Antigravity: 默认使用映射模式并填充默认映射
@@ -5667,7 +5684,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (nativeWireEnabled.value && !selectableTLSProfiles.value.some(p => p.id === tlsFingerprintProfileId.value)) {
+  if (nativeWireEnabled.value && (tlsProfilesLoading.value || tlsProfileCreating.value || !!tlsProfilesError.value || !selectableTLSProfiles.value.some(p => p.id === tlsFingerprintProfileId.value))) {
     appStore.showError('Native 模式必须选择已验证的 TLS 模板')
     return
   }

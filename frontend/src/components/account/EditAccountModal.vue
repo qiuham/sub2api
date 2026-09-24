@@ -26,6 +26,94 @@
         <p class="input-hint">{{ t('admin.accounts.notesHint') }}</p>
       </div>
 
+      <!-- Native 原生链路模式（Claude / Codex OAuth） -->
+      <div
+        v-if="(account?.platform === 'openai' || account?.platform === 'anthropic') && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">原生链路模式</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              原样透传官方客户端请求；关闭时使用 Sub2API 兼容链路。
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="edit-native-wire-toggle"
+            role="switch"
+            :aria-checked="nativeWireMode === 'native'"
+            @click="toggleNativeWireMode"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              nativeWireMode === 'native' ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                nativeWireMode === 'native' ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+        <!-- TLS Fingerprint -->
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+          <div class="flex items-center justify-between">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.quotaControl.tlsFingerprint.hint') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              :disabled="nativeWireMode === 'native'"
+              @click="tlsFingerprintEnabled = !tlsFingerprintEnabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                tlsFingerprintEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  tlsFingerprintEnabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <!-- Profile selector -->
+          <div v-if="tlsFingerprintEnabled || nativeWireMode === 'native'" class="mt-3">
+            <p v-if="nativeWireMode === 'native'" class="input-hint">Native 必须绑定与客户端版本匹配的已验证模板。</p>
+            <Select
+              :model-value="tlsFingerprintProfileId"
+              @update:model-value="selectTLSProfile"
+              :options="tlsProfileOptions"
+              :disabled="tlsProfilesLoading || tlsProfileCreating"
+              placeholder="请选择指纹模板"
+              data-testid="edit-native-tls-profile-select"
+            />
+            <p v-if="tlsProfilesLoading" class="input-hint" role="status">正在加载模板…</p>
+            <div v-else-if="tlsProfilesError" class="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">
+              <p>{{ tlsProfilesError }}</p>
+              <button type="button" class="btn btn-secondary btn-sm mt-2" @click="loadTLSProfiles">重试加载</button>
+            </div>
+            <div v-else-if="(nativeWireMode === 'native') && !selectableTLSProfiles.length" class="mt-2">
+              <p class="input-hint">暂无匹配的已验证模板，请先创建并选择模板后再保存。</p>
+              <button
+                type="button"
+                class="btn btn-secondary btn-sm mt-2"
+                data-testid="edit-native-tls-create"
+                :disabled="tlsProfileCreating"
+                @click="createNativeTLSProfile"
+              >{{ tlsProfileCreating ? '正在创建…' : '创建并选择已验证模板' }}</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
       <!-- API Key fields (only for apikey type) -->
       <div v-if="account.type === 'apikey'" class="space-y-4">
         <div v-if="!isCNApiKeyAccount || editApiProtocol !== 'adaptive'">
@@ -1769,76 +1857,6 @@
         </div>
       </div>
 
-      <!-- Native 原生链路模式（Claude / Codex OAuth） -->
-      <div
-        v-if="(account?.platform === 'openai' || account?.platform === 'anthropic') && (account?.type === 'oauth' || account?.type === 'setup-token')"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-      >
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <label class="input-label mb-0">原生链路模式</label>
-            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              原样透传官方客户端请求；关闭时使用 Sub2API 兼容链路。
-            </p>
-          </div>
-          <button
-            type="button"
-            data-testid="edit-native-wire-toggle"
-            role="switch"
-            :aria-checked="nativeWireMode === 'native'"
-            @click="toggleNativeWireMode"
-            :class="[
-              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-              nativeWireMode === 'native' ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-            ]"
-          >
-            <span
-              :class="[
-                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                nativeWireMode === 'native' ? 'translate-x-5' : 'translate-x-0'
-              ]"
-            />
-          </button>
-        </div>
-        <!-- TLS Fingerprint -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
-          <div class="flex items-center justify-between">
-            <div>
-              <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.accounts.quotaControl.tlsFingerprint.hint') }}
-              </p>
-            </div>
-            <button
-              type="button"
-              :disabled="nativeWireMode === 'native'"
-              @click="tlsFingerprintEnabled = !tlsFingerprintEnabled"
-              :class="[
-                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-                tlsFingerprintEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  tlsFingerprintEnabled ? 'translate-x-5' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-          <!-- Profile selector -->
-          <div v-if="tlsFingerprintEnabled || nativeWireMode === 'native'" class="mt-3">
-            <p v-if="nativeWireMode === 'native'" class="input-hint">Native 必须绑定与客户端版本匹配的已验证模板。</p>
-            <select v-model="tlsFingerprintProfileId" data-testid="edit-native-tls-profile-select" class="input">
-              <option v-if="nativeWireMode !== 'native'" :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
-              <option v-if="nativeWireMode !== 'native' && tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
-              <option v-for="p in selectableTLSProfiles" :key="p.id" :value="p.id">{{ p.name }}{{ p.native_versions?.length ? ` (${p.native_versions.join(', ')})` : '' }}</option>
-            </select>
-          </div>
-        </div>
-
-      </div>
-
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -3144,6 +3162,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 
 import { adminAPI } from '@/api/admin'
+import { useAccountTLSProfiles } from '@/composables/useAccountTLSProfiles'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import type {
   Account,
@@ -3708,10 +3727,10 @@ const umqModeOptions = computed(() => [
 ])
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
-const tlsFingerprintProfiles = ref<{ id: number; name: string; native_family?: string; native_versions?: string[] }[]>([])
-const selectableTLSProfiles = computed(() => nativeWireMode.value === 'native'
-  ? tlsFingerprintProfiles.value.filter(p => p.native_family === (props.account?.platform === 'openai' ? 'codex' : 'claude'))
-  : tlsFingerprintProfiles.value)
+const {
+  selectableTLSProfiles, tlsProfileOptions, tlsProfilesLoading, tlsProfileCreating,
+  tlsProfilesError, loadTLSProfiles, createNativeTLSProfile, selectTLSProfile
+} = useAccountTLSProfiles(() => props.account?.platform, () => nativeWireMode.value === 'native', tlsFingerprintProfileId)
 const sessionIdMaskingEnabled = ref(false)
 const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
@@ -4586,14 +4605,6 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   editApiKey.value = ''
 }
 
-async function loadTLSProfiles() {
-  try {
-    const profiles = await adminAPI.tlsFingerprintProfiles.list()
-    tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name, native_family: p.native_family, native_versions: p.native_versions }))
-  } catch {
-    tlsFingerprintProfiles.value = []
-  }
-}
 
 watch(
   [() => props.show, () => props.account],
@@ -5171,7 +5182,7 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
-  if (nativeWireMode.value === 'native' && !selectableTLSProfiles.value.some(p => p.id === tlsFingerprintProfileId.value)) {
+  if (nativeWireMode.value === 'native' && (tlsProfilesLoading.value || tlsProfileCreating.value || !!tlsProfilesError.value || !selectableTLSProfiles.value.some(p => p.id === tlsFingerprintProfileId.value))) {
     appStore.showError('Native 模式必须选择已验证的 TLS 模板')
     return
   }

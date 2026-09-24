@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, createNativeTLSProfileMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
   listTLSProfilesMock: vi.fn(),
+  createNativeTLSProfileMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -36,6 +37,7 @@ vi.mock('@/api/admin', () => ({
       getSettings: vi.fn().mockResolvedValue({})
     },
     tlsFingerprintProfiles: {
+      createNative: createNativeTLSProfileMock,
       list: listTLSProfilesMock
     }
   }
@@ -327,6 +329,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    createNativeTLSProfileMock.mockReset()
     listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'codex-verified', native_family: 'codex', native_versions: ['0.156.1'] }])
   })
 
@@ -915,6 +918,59 @@ describe('EditAccountModal', () => {
     await wrapper.get('[data-testid="edit-native-tls-profile-select"]').setValue('7')
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.existing_setting).toBe('keep-me')
+  })
+
+
+
+  it('creates and selects a missing template through the existing profile API', async () => {
+    listTLSProfilesMock.mockResolvedValue([])
+    createNativeTLSProfileMock.mockResolvedValue({ id: 19, name: 'verified', native_family: 'codex', native_versions: ['test-version'] })
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="edit-native-tls-create"]').trigger('click')
+    await flushPromises()
+    expect(createNativeTLSProfileMock).toHaveBeenCalledWith('codex')
+    expect((wrapper.vm as any).tlsFingerprintProfileId).toBe(19)
+    expect(wrapper.find('[data-testid="edit-native-tls-create"]').exists()).toBe(false)
+  })
+
+  it('distinguishes profile loading errors from missing profiles and retries', async () => {
+    listTLSProfilesMock.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    expect(wrapper.text()).toContain('模板加载失败')
+    expect(wrapper.text()).not.toContain('暂无匹配的已验证模板')
+    expect(wrapper.find('[data-testid="edit-native-tls-create"]').exists()).toBe(false)
+    const retry = wrapper.findAll('button').find(b => b.text() === '重试加载')!
+    await retry.trigger('click')
+    await flushPromises()
+    expect(listTLSProfilesMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('模板加载失败')
+  })
+
+  it('offers an inline remedy when Native templates are missing', async () => {
+    listTLSProfilesMock.mockResolvedValue([])
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    expect(wrapper.text()).toContain('暂无匹配的已验证模板')
+    expect(wrapper.find('[data-testid="edit-native-tls-create"]').exists()).toBe(true)
+  })
+
+  it('uses the shared Select for TLS templates', async () => {
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    expect(wrapper.findAllComponents({ name: 'SelectStub' }).some(c => c.attributes('data-testid') === 'edit-native-tls-profile-select')).toBe(true)
+  })
+
+  it('places Native settings immediately after notes', async () => {
+    const wrapper = mountModal(buildOpenAIOAuthParentAccount())
+    await flushPromises()
+    const sections = wrapper.get('form#edit-account-form').element.children
+    expect(sections[2].querySelector('[data-testid="edit-native-wire-toggle"]')).not.toBeNull()
   })
 
   it('does not save Native mode without a bound TLS template', async () => {

@@ -110,3 +110,11 @@ func TestAdminNativeEditSaveReloadAndDisable(t *testing.T) {
 		t.Fatalf("Sub2API did not survive save/reload: account=%+v err=%v", reloaded, err)
 	}
 }
+
+func TestNativeInvalidProfileIsExcludedFromScheduling(t *testing.T) {
+	service := &GatewayService{tlsFPProfileService: &TLSFingerprintProfileService{localCache: map[int64]*model.TLSFingerprintProfile{}}}
+	invalid := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: "active", Extra: map[string]any{"native_wire_mode": "native"}}
+	if service.isAccountSchedulableForSelection(invalid) {
+		t.Fatal("invalid Native account entered scheduling candidates")
+	}
+}

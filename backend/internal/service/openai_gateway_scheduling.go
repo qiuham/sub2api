@@ -395,6 +395,9 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	if account.Platform != platform || !account.IsOpenAICompatible() {
 		return "platform_mismatch"
 	}
+	if account.IsNativeWireEnabled() && (!account.IsTLSFingerprintEnabled() || account.GetTLSFingerprintProfileID() <= 0) {
+		return "native_tls_profile_invalid"
+	}
 	if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		if account.IsSchedulable() {
 			return "model_rate_limited"

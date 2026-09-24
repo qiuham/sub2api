@@ -1147,10 +1147,15 @@ func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform 
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
-	if account == nil {
+	if account == nil || !account.IsSchedulable() {
 		return false
 	}
-	return account.IsSchedulable()
+	// Invalid historical Native records must leave the candidate pool; do not
+	// repeatedly select an account that can only fail the TLS gate.
+	if account.IsNativeWireEnabled() && validateNativeAccountProfile(account, s.tlsFPProfileService) != nil {
+		return false
+	}
+	return true
 }
 
 func (s *GatewayService) isAccountSchedulableForModelSelection(ctx context.Context, account *Account, requestedModel string) bool {

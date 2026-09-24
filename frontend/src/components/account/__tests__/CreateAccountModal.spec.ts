@@ -9,6 +9,7 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  createNativeTLSProfileMock,
   listTLSProfilesMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
@@ -19,6 +20,7 @@ const {
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   listTLSProfilesMock: vi.fn(),
+  createNativeTLSProfileMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -53,6 +55,7 @@ vi.mock('@/api/admin', () => ({
       getSettings: vi.fn().mockResolvedValue({}),
     },
     tlsFingerprintProfiles: {
+      createNative: createNativeTLSProfileMock,
       list: listTLSProfilesMock,
     },
   },
@@ -135,6 +138,15 @@ const ModelWhitelistSelectorStub = defineComponent({
   >models</button>`,
 })
 
+const SelectStub = defineComponent({
+  name: 'SelectStub',
+  props: ['modelValue', 'options'],
+  emits: ['update:modelValue'],
+  template: `<select :value="modelValue" @change="$emit('update:modelValue', $event.target.value)">
+    <option v-for="option in options" :key="String(option.value)" :value="option.value">{{ option.label }}</option>
+  </select>`
+})
+
 function mountModal(groups: any[] = []) {
   return mount(CreateAccountModal, {
     props: { show: true, proxies: [], groups },
@@ -143,7 +155,7 @@ function mountModal(groups: any[] = []) {
         BaseDialog: BaseDialogStub,
         OAuthAuthorizationFlow: OAuthAuthorizationFlowStub,
         ConfirmDialog: true,
-        Select: true,
+        Select: SelectStub,
         Icon: true,
         PlatformIcon: true,
         ProxySelector: true,
@@ -199,6 +211,7 @@ async function openCodexImportStep(toggleClicks = 0) {
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    createNativeTLSProfileMock.mockReset()
     listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'codex-verified', native_family: 'codex', native_versions: ['0.156.1'] }])
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
@@ -688,6 +701,59 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.native_wire_mode).toBe('native')
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.enable_tls_fingerprint).toBe(true)
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.tls_fingerprint_profile_id).toBe(7)
+  })
+
+
+
+  it('creates and selects a missing template through the existing profile API', async () => {
+    listTLSProfilesMock.mockResolvedValue([])
+    createNativeTLSProfileMock.mockResolvedValue({ id: 19, name: 'verified', native_family: 'claude', native_versions: ['test-version'] })
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="create-native-tls-create"]').trigger('click')
+    await flushPromises()
+    expect(createNativeTLSProfileMock).toHaveBeenCalledWith('claude')
+    expect((wrapper.vm as any).tlsFingerprintProfileId).toBe(19)
+    expect(wrapper.find('[data-testid="create-native-tls-create"]').exists()).toBe(false)
+  })
+
+  it('distinguishes profile loading errors from missing profiles and retries', async () => {
+    listTLSProfilesMock.mockRejectedValueOnce(new Error('network'))
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    expect(wrapper.text()).toContain('模板加载失败')
+    expect(wrapper.text()).not.toContain('暂无匹配的已验证模板')
+    expect(wrapper.find('[data-testid="create-native-tls-create"]').exists()).toBe(false)
+    const retry = wrapper.findAll('button').find(b => b.text() === '重试加载')!
+    await retry.trigger('click')
+    await flushPromises()
+    expect(listTLSProfilesMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).not.toContain('模板加载失败')
+  })
+
+  it('offers an inline remedy when Native templates are missing', async () => {
+    listTLSProfilesMock.mockResolvedValue([])
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    expect(wrapper.text()).toContain('暂无匹配的已验证模板')
+    expect(wrapper.find('[data-testid="create-native-tls-create"]').exists()).toBe(true)
+  })
+
+  it('uses the shared Select for TLS templates', async () => {
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    expect(wrapper.findAllComponents({ name: 'SelectStub' }).some(c => c.attributes('data-testid') === 'create-native-tls-profile-select')).toBe(true)
+  })
+
+  it('places Native settings immediately after notes', async () => {
+    const wrapper = mountModal()
+    await flushPromises()
+    const sections = wrapper.get('form#create-account-form').element.children
+    expect(sections[2].querySelector('[data-testid="create-native-wire-toggle"]')).not.toBeNull()
   })
 
   it('does not advance Native account creation without a TLS template', async () => {

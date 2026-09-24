@@ -2,9 +2,11 @@ package admin
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -12,6 +14,64 @@ import (
 // TLSFingerprintProfileHandler 处理 TLS 指纹模板的 HTTP 请求
 type TLSFingerprintProfileHandler struct {
 	service *service.TLSFingerprintProfileService
+}
+
+type nativeProfileView struct {
+	*model.TLSFingerprintProfile
+	NativeFamily   string   `json:"native_family,omitempty"`
+	NativeVersions []string `json:"native_versions,omitempty"`
+}
+
+func profileView(profile *model.TLSFingerprintProfile) nativeProfileView {
+	view := nativeProfileView{TLSFingerprintProfile: profile}
+	if profile == nil {
+		return view
+	}
+	for _, family := range []string{"claude", "codex"} {
+		if tlsfingerprint.MatchesVerifiedNativeProfile(profile.ToTLSProfile(), tlsfingerprint.VerifiedNativeProfile(family, tlsfingerprint.LatestVerifiedNativeVersion(family))) {
+			view.NativeFamily = family
+			view.NativeVersions = tlsfingerprint.VerifiedNativeVersions(family)
+			break
+		}
+	}
+	return view
+}
+
+// CreateNative installs an already measured profile in the existing template
+// store. Repeated clicks return the existing matching template.
+func (h *TLSFingerprintProfileHandler) CreateNative(c *gin.Context) {
+	family := c.Param("family")
+	version := tlsfingerprint.LatestVerifiedNativeVersion(family)
+	verified := tlsfingerprint.VerifiedNativeProfile(family, version)
+	if verified == nil {
+		response.BadRequest(c, "Unknown native client family")
+		return
+	}
+	profiles, err := h.service.List(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	for _, existing := range profiles {
+		if existing != nil && tlsfingerprint.MatchesVerifiedNativeProfile(existing.ToTLSProfile(), verified) {
+			response.Success(c, profileView(existing))
+			return
+		}
+	}
+	description := "Native " + family + " verified versions: " + strings.Join(tlsfingerprint.VerifiedNativeVersions(family), ", ")
+	created, err := h.service.Create(c.Request.Context(), &model.TLSFingerprintProfile{
+		Name: verified.Name, Description: &description,
+		EnableGREASE: verified.EnableGREASE, CipherSuites: verified.CipherSuites,
+		Curves: verified.Curves, PointFormats: verified.PointFormats,
+		SignatureAlgorithms: verified.SignatureAlgorithms, ALPNProtocols: verified.ALPNProtocols,
+		SupportedVersions: verified.SupportedVersions, KeyShareGroups: verified.KeyShareGroups,
+		PSKModes: verified.PSKModes, Extensions: verified.Extensions,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, profileView(created))
 }
 
 // NewTLSFingerprintProfileHandler 创建 TLS 指纹模板处理器
@@ -59,7 +119,11 @@ func (h *TLSFingerprintProfileHandler) List(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, profiles)
+	views := make([]nativeProfileView, 0, len(profiles))
+	for _, profile := range profiles {
+		views = append(views, profileView(profile))
+	}
+	response.Success(c, views)
 }
 
 // GetByID 根据 ID 获取模板
@@ -81,7 +145,7 @@ func (h *TLSFingerprintProfileHandler) GetByID(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, profile)
+	response.Success(c, profileView(profile))
 }
 
 // Create 创建模板

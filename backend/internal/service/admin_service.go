@@ -689,6 +689,7 @@ type adminServiceImpl struct {
 	groupDuplicateRepo   GroupDuplicateRepository
 	emptyGroupDeleteRepo EmptyGroupDeleteRepository
 	accountRepo          AccountRepository
+	tlsProfileService    *TLSFingerprintProfileService
 	accountDuplicateRepo AccountDuplicateRepository
 	accountBillingRepo   AccountBillingSettingsRepository
 	proxyRepo            ProxyRepository
@@ -752,6 +753,7 @@ func NewAdminService(
 	compositeRouteRepo CompositeModelRouteRepository,
 	compositeResolver *CompositeRouteResolver,
 	channelCacheInvalidator ChannelCacheInvalidator,
+	tlsProfileService *TLSFingerprintProfileService,
 ) AdminService {
 	return &adminServiceImpl{
 		cfg:                  cfg,
@@ -760,6 +762,7 @@ func NewAdminService(
 		groupDuplicateRepo:   groupRepo,
 		emptyGroupDeleteRepo: groupRepo,
 		accountRepo:          accountRepo,
+		tlsProfileService:    tlsProfileService,
 		accountDuplicateRepo: accountRepo,
 		accountBillingRepo:   accountRepo,
 		proxyRepo:            proxyRepo,

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/nativewire"
 	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
@@ -93,6 +94,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if parsed == nil {
 		return nil, fmt.Errorf("parse request: empty request")
 	}
+	nativeProfile, profileErr := nativeTLSProfile(c, account, s.tlsFPProfileService)
+	if profileErr != nil {
+		return nil, rejectNativeTLSProfile(c, profileErr)
+	}
 	// API-key mappings and OAuth native IDs are resolved before mimicry.
 	validationModel := parsed.Model
 	if account != nil && account.Type == AccountTypeAPIKey {
@@ -103,6 +108,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			c.JSON(http.StatusBadRequest, gin.H{"type": "error", "error": gin.H{"type": "invalid_request_error", "message": err.Error()}})
 			return nil, err
 		}
+	}
+	if err := rejectNativeClaudeTelemetry(ctx, c, account, parsed.Body.Bytes()); err != nil {
+		return nil, err
 	}
 	// Anthropic Fast is requested with speed=fast rather than OpenAI's
 	// service_tier. Attach it at this shared boundary so passthrough, OAuth and
@@ -117,7 +125,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	beginUpstreamResponseModelObservation(c)
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
-	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
+	if account != nil && !account.IsNativeWireEnabled() && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
 	}
 
@@ -161,6 +169,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	body := parsed.Body.Bytes()
 	replaceBody := func(next []byte) error {
+		if account.IsNativeWireEnabled() {
+			return nil
+		}
 		if err := parsed.ReplaceBody(next); err != nil {
 			return fmt.Errorf("rewrite request body: %w", err)
 		}
@@ -204,7 +215,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		isClaudeCode = systemHasBillingAttributionBlock(body)
 	}
 
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode && !account.IsNativeWireEnabled()
 
 	if shouldMimicClaudeCode {
 		// 与 Parrot 对齐：OAuth 账号无条件重写 system（即使客户端已发了 Claude Code
@@ -306,7 +317,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			mappingSource = "prefix"
 		}
 	}
-	if mappedModel != reqModel {
+	if mappedModel != reqModel && !account.IsNativeWireEnabled() {
 		// 替换请求体中的模型名
 		if err := replaceBody(s.replaceModelInBody(body, mappedModel)); err != nil {
 			return nil, err
@@ -338,6 +349,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 解析 TLS 指纹 profile（同一请求生命周期内不变，避免重试循环中重复解析）
 	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+	if account.IsNativeWireEnabled() {
+		tlsProfile = nativeProfile
+	}
 
 	// 调试日志：记录即将转发的账号信息
 	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",
@@ -404,12 +418,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		}
 
 		// 优先检测thinking block签名错误（400）并重试一次
-		if resp.StatusCode == 400 {
+		if resp.StatusCode == 400 && !account.IsNativeWireEnabled() {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
 			if readErr == nil {
 				_ = resp.Body.Close()
 
-				if s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
+				if !account.IsNativeWireEnabled() && s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						ProxyID:            opsUpstreamProxyID(account),
 						ProxyName:          opsUpstreamProxyName(account),
@@ -555,7 +569,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				}
 				// 不是签名错误（或整流器已关闭），继续检查 budget 约束
 				errMsg := extractUpstreamErrorMessage(respBody)
-				if isThinkingBudgetConstraintError(errMsg) && s.settingService.IsBudgetRectifierEnabled(ctx) {
+				if !account.IsNativeWireEnabled() && isThinkingBudgetConstraintError(errMsg) && s.settingService.IsBudgetRectifierEnabled(ctx) {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 						ProxyID:            opsUpstreamProxyID(account),
 						ProxyName:          opsUpstreamProxyName(account),
@@ -898,6 +912,43 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		FirstTokenMs:                  firstTokenMs,
 		ClientDisconnect:              clientDisconnect,
 	}, nil
+}
+
+// rejectNativeClaudeTelemetry uses versioned, measured tool-set signatures
+// before OAuth token use or any upstream connection. Unknown versions or tool
+// sets are rejected rather than treated as telemetry-off.
+func rejectNativeClaudeTelemetry(ctx context.Context, c *gin.Context, account *Account, body []byte) error {
+	if account == nil || !account.IsNativeWireEnabled() || account.Platform != PlatformAnthropic {
+		return nil
+	}
+	version := ""
+	if c != nil && c.Request != nil {
+		version = ExtractCLIVersion(c.Request.UserAgent())
+	}
+	baseline, verified := nativewire.VerifiedClaudeTelemetryBaseline(version)
+	if !verified {
+		if c != nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+				"type": "native_telemetry_blocked", "message": "Native Claude telemetry baseline is not verified for this client version",
+			}})
+		}
+		return fmt.Errorf("native Claude telemetry baseline is not verified for version %q", version)
+	}
+	state, signature, err := nativewire.ClassifyClaudeTelemetry(body, baseline)
+	if err != nil {
+		state = nativewire.TelemetryUnknown
+	}
+	if state == nativewire.TelemetryOff {
+		return nil
+	}
+	if c != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{
+			"type":    "native_telemetry_blocked",
+			"message": "Disable client telemetry before using native mode",
+		}})
+	}
+	logger.LegacyPrintf("service.gateway", "Native telemetry gate rejected account=%d state=%s signature=%s", account.ID, state, signature)
+	return fmt.Errorf("native telemetry policy rejected Claude request (%s)", state)
 }
 
 func anthropicSpeedModel(parsed *ParsedRequest, result *ForwardResult) string {

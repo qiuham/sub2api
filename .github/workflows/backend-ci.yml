@@ -2,7 +2,15 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -60,8 +68,12 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: pnpm install --frozen-lockfile
-      - name: Frontend typecheck and critical vitest
-        run: make test-frontend
+      - name: Frontend lint, typecheck and full test suite
+        working-directory: frontend
+        run: |
+          pnpm run lint:check
+          pnpm run typecheck
+          pnpm exec vitest run
 
   golangci-lint:
     runs-on: ubuntu-latest
@@ -91,5 +103,5 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -r .github/release-tools/requirements-release.txt
-      - run: python -m unittest discover -s .github/release-tools -p 'test_release_matrix.py'
+      - run: python -m unittest discover -s .github/release-tools -p 'test_release*.py'
       - run: bash -n .github/release-tools/release-images.sh

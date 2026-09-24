@@ -10,6 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/nativewire"
 	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,10 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	if parsed == nil {
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
+	}
+	nativeProfile, profileErr := nativeTLSProfile(c, account, s.tlsFPProfileService)
+	if profileErr != nil {
+		return rejectNativeTLSProfile(c, profileErr)
 	}
 
 	validationModel := parsed.Model
@@ -62,12 +67,14 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	reqModel := parsed.Model
 
 	// Pre-filter: strip empty text blocks to prevent upstream 400.
-	if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
-		return err
+	if !account.IsNativeWireEnabled() {
+		if err := replaceBody(StripEmptyTextBlocks(body)); err != nil {
+			return err
+		}
 	}
 
 	isClaudeCodeCT := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
+	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT && !account.IsNativeWireEnabled()
 
 	if shouldMimicClaudeCode {
 		var normalizedBody []byte
@@ -107,7 +114,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// 应用模型映射：
 	// - APIKey 账号：使用账号级别的显式映射（如果配置），否则透传原始模型名
 	// - OAuth/SetupToken 账号：使用 Anthropic 标准映射（短ID → 长ID）
-	if reqModel != "" {
+	if reqModel != "" && !account.IsNativeWireEnabled() {
 		mappedModel := reqModel
 		mappingSource := ""
 		if account.Type == AccountTypeAPIKey {
@@ -159,7 +166,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+	if account.IsNativeWireEnabled() {
+		tlsProfile = nativeProfile
+	}
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	if err != nil {
 		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
@@ -178,9 +189,27 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		}
 		return err
 	}
+	if account.IsNativeWireEnabled() {
+		if resp.StatusCode >= 400 {
+			if s.rateLimitService != nil {
+				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+			}
+			setOpsUpstreamError(c, resp.StatusCode, sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(respBody)), "")
+			MarkResponseCommitted(c)
+		}
+		nativewire.CopyResponseHeaders(c.Writer.Header(), resp.Header)
+		c.Writer.WriteHeader(resp.StatusCode)
+		if _, err := c.Writer.Write(respBody); err != nil {
+			return err
+		}
+		if resp.StatusCode >= 400 {
+			return fmt.Errorf("upstream error: %d", resp.StatusCode)
+		}
+		return nil
+	}
 
 	// 检测 thinking block 签名错误（400）并重试一次（过滤 thinking blocks）
-	if resp.StatusCode == 400 && s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
+	if resp.StatusCode == 400 && !account.IsNativeWireEnabled() && s.shouldRectifySignatureError(ctx, account, respBody, reqModel) {
 		logger.LegacyPrintf("service.gateway", "Account %d: detected thinking block signature error on count_tokens, retrying with filtered thinking blocks", account.ID)
 
 		filteredBody := FilterThinkingBlocksForRetry(body, reqModel)
@@ -371,7 +400,11 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 		return fmt.Errorf("upstream error: %d message=%s", resp.StatusCode, upstreamMsg)
 	}
 
-	writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	if account != nil && account.IsNativeWireEnabled() {
+		nativewire.CopyResponseHeaders(c.Writer.Header(), resp.Header)
+	} else {
+		writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = "application/json"
@@ -453,7 +486,9 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 
 // buildCountTokensRequest 构建 count_tokens 上游请求
 func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, mimicClaudeCode bool) (*http.Request, []byte, error) {
-	body = stripDeferredToolCacheControl(body)
+	if !account.IsNativeWireEnabled() {
+		body = stripDeferredToolCacheControl(body)
+	}
 	// 确定目标 URL
 	targetURL := claudeAPICountTokensURL
 	if account.Type == AccountTypeAPIKey {
@@ -480,6 +515,15 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	clientHeaders := http.Header{}
 	if c != nil && c.Request != nil {
 		clientHeaders = c.Request.Header
+	}
+	if account.IsNativeWireEnabled() {
+		req, err := http.NewRequestWithContext(nativewire.MarkRequest(ctx), http.MethodPost, targetURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, nil, err
+		}
+		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
+		nativewire.CopyRequestHeaders(req.Header, clientHeaders)
+		return req, body, nil
 	}
 
 	// OAuth 账号：应用统一指纹和重写 userID（受设置开关控制）

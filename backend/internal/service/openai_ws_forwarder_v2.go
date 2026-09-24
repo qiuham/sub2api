@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -204,6 +205,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
 		Account: account,
+		TLSProfile: func() *tlsfingerprint.Profile {
+			if account != nil && account.IsNativeWireEnabled() {
+				return s.tlsFPProfileService.ResolveTLSProfile(account)
+			}
+			return nil
+		}(),
 		WSURL:   wsURL,
 		Headers: wsHeaders,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {

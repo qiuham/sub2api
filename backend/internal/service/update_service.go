@@ -15,11 +15,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"golang.org/x/mod/semver"
 )
 
 var (
@@ -30,7 +30,8 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	githubRepo     = "qiuham/sub2api"
+	upstreamRepo   = "Wei-Shaw/sub2api"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -41,7 +42,7 @@ const (
 
 	// Rollback: expose at most the 3 most recent versions older than current
 	maxRollbackVersions = 3
-	// Fetch a few extra releases so filtering (current/newer/prerelease) still leaves enough candidates
+	// Fetch a few extra releases so filtering still leaves enough candidates
 	rollbackFetchPageSize = 15
 )
 
@@ -79,13 +80,16 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 
 // UpdateInfo contains update information
 type UpdateInfo struct {
-	CurrentVersion string       `json:"current_version"`
-	LatestVersion  string       `json:"latest_version"`
-	HasUpdate      bool         `json:"has_update"`
-	ReleaseInfo    *ReleaseInfo `json:"release_info,omitempty"`
-	Cached         bool         `json:"cached"`
-	Warning        string       `json:"warning,omitempty"`
-	BuildType      string       `json:"build_type"` // "source" or "release"
+	CurrentVersion        string       `json:"current_version"`
+	LatestVersion         string       `json:"latest_version"`
+	HasUpdate             bool         `json:"has_update"`
+	ReleaseInfo           *ReleaseInfo `json:"release_info,omitempty"`
+	Cached                bool         `json:"cached"`
+	Warning               string       `json:"warning,omitempty"`
+	BuildType             string       `json:"build_type"` // "source" or "release"
+	UpstreamLatestVersion string       `json:"upstream_latest_version,omitempty"`
+	HasUpstreamUpdate     bool         `json:"has_upstream_update,omitempty"`
+	UpstreamReleaseInfo   *ReleaseInfo `json:"upstream_release_info,omitempty"`
 }
 
 // ReleaseInfo contains GitHub release details
@@ -139,7 +143,7 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 	}
 
 	// Fetch from GitHub
-	info, err := s.fetchLatestRelease(ctx)
+	info, err := s.fetchLatestRelease(ctx, githubRepo)
 	if err != nil {
 		// Return cached on error
 		if cached, cacheErr := s.getFromCache(ctx); cacheErr == nil && cached != nil {
@@ -153,6 +157,15 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			Warning:        err.Error(),
 			BuildType:      s.buildType,
 		}, nil
+	}
+
+	// Upstream releases are advisory only. They are never used by PerformUpdate.
+	if upstream, upstreamErr := s.fetchLatestRelease(ctx, upstreamRepo); upstreamErr == nil {
+		info.UpstreamLatestVersion = upstream.LatestVersion
+		info.HasUpstreamUpdate = compareUpstreamVersion(s.currentVersion, upstream.LatestVersion) < 0
+		info.UpstreamReleaseInfo = upstream.ReleaseInfo
+	} else if info.Warning == "" {
+		info.Warning = "upstream check unavailable: " + upstreamErr.Error()
 	}
 
 	// Cache result
@@ -305,7 +318,7 @@ func (s *UpdateService) Rollback() error {
 
 // ListRollbackVersions returns up to maxRollbackVersions release versions that are
 // strictly older than the current version (the current version itself is excluded),
-// newest first. Draft and prerelease entries are skipped.
+// newest first. Draft releases and unrelated prereleases are skipped.
 func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVersion, error) {
 	releases, err := s.fetchRollbackCandidates(ctx)
 	if err != nil {
@@ -371,6 +384,7 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	seen := make(map[string]bool, len(releases))
 	candidates := make([]*GitHubRelease, 0, maxRollbackVersions)
 	for _, r := range releases {
+		// 只允许正式发布版本回滚，测试构建不进入更新列表。
 		if r == nil || r.Draft || r.Prerelease {
 			continue
 		}
@@ -399,8 +413,8 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	return candidates, nil
 }
 
-func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+func (s *UpdateService) fetchLatestRelease(ctx context.Context, repo string) (*UpdateInfo, error) {
+	release, err := s.githubClient.FetchLatestRelease(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -600,9 +614,11 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	var cached struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
+		Latest              string       `json:"latest"`
+		ReleaseInfo         *ReleaseInfo `json:"release_info"`
+		UpstreamLatest      string       `json:"upstream_latest"`
+		UpstreamReleaseInfo *ReleaseInfo `json:"upstream_release_info"`
+		Timestamp           int64        `json:"timestamp"`
 	}
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
@@ -613,57 +629,43 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	return &UpdateInfo{
-		CurrentVersion: s.currentVersion,
-		LatestVersion:  cached.Latest,
-		HasUpdate:      compareVersions(s.currentVersion, cached.Latest) < 0,
-		ReleaseInfo:    cached.ReleaseInfo,
-		Cached:         true,
-		BuildType:      s.buildType,
+		CurrentVersion:        s.currentVersion,
+		LatestVersion:         cached.Latest,
+		HasUpdate:             compareVersions(s.currentVersion, cached.Latest) < 0,
+		ReleaseInfo:           cached.ReleaseInfo,
+		UpstreamLatestVersion: cached.UpstreamLatest,
+		HasUpstreamUpdate:     compareUpstreamVersion(s.currentVersion, cached.UpstreamLatest) < 0,
+		UpstreamReleaseInfo:   cached.UpstreamReleaseInfo,
+		Cached:                true,
+		BuildType:             s.buildType,
 	}, nil
 }
 
 func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
-		Latest      string       `json:"latest"`
-		ReleaseInfo *ReleaseInfo `json:"release_info"`
-		Timestamp   int64        `json:"timestamp"`
+		Latest              string       `json:"latest"`
+		ReleaseInfo         *ReleaseInfo `json:"release_info"`
+		UpstreamLatest      string       `json:"upstream_latest"`
+		UpstreamReleaseInfo *ReleaseInfo `json:"upstream_release_info"`
+		Timestamp           int64        `json:"timestamp"`
 	}{
-		Latest:      info.LatestVersion,
-		ReleaseInfo: info.ReleaseInfo,
-		Timestamp:   time.Now().Unix(),
+		Latest:              info.LatestVersion,
+		ReleaseInfo:         info.ReleaseInfo,
+		UpstreamLatest:      info.UpstreamLatestVersion,
+		UpstreamReleaseInfo: info.UpstreamReleaseInfo,
+		Timestamp:           time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(cacheData)
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
 }
 
-// compareVersions compares two semantic versions
+// compareVersions compares full semantic versions, including Native suffixes.
 func compareVersions(current, latest string) int {
-	currentParts := parseVersion(current)
-	latestParts := parseVersion(latest)
-
-	for i := 0; i < 3; i++ {
-		if currentParts[i] < latestParts[i] {
-			return -1
-		}
-		if currentParts[i] > latestParts[i] {
-			return 1
-		}
-	}
-	return 0
+	return semver.Compare("v"+strings.TrimPrefix(current, "v"), "v"+strings.TrimPrefix(latest, "v"))
 }
 
-func parseVersion(v string) [3]int {
-	v = strings.TrimPrefix(v, "v")
-	if idx := strings.IndexByte(v, '-'); idx != -1 {
-		v = v[:idx]
-	}
-	parts := strings.Split(v, ".")
-	result := [3]int{0, 0, 0}
-	for i := 0; i < len(parts) && i < 3; i++ {
-		if parsed, err := strconv.Atoi(parts[i]); err == nil {
-			result[i] = parsed
-		}
-	}
-	return result
+func compareUpstreamVersion(current, latest string) int {
+	base := strings.SplitN(strings.TrimPrefix(current, "v"), "-", 2)[0]
+	return semver.Compare("v"+base, "v"+strings.TrimPrefix(latest, "v"))
 }

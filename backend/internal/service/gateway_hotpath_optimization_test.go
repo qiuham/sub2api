@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -208,66 +209,64 @@ func resetGatewayHotpathStatsForTest() {
 }
 
 func TestGetUserGroupRateMultiplier_UsesCacheAndSingleflight(t *testing.T) {
-	resetGatewayHotpathStatsForTest()
+	synctest.Test(t, func(t *testing.T) {
+		resetGatewayHotpathStatsForTest()
 
-	rate := 1.7
-	unblock := make(chan struct{})
-	repo := &userGroupRateRepoHotpathStub{
-		rate: &rate,
-		wait: unblock,
-	}
-	svc := &GatewayService{
-		userGroupRateRepo:  repo,
-		userGroupRateCache: gocache.New(time.Minute, time.Minute),
-		cfg: &config.Config{
-			Gateway: config.GatewayConfig{
-				UserGroupRateCacheTTLSeconds: 30,
+		rate := 1.7
+		unblock := make(chan struct{})
+		repo := &userGroupRateRepoHotpathStub{
+			rate: &rate,
+			wait: unblock,
+		}
+		svc := &GatewayService{
+			userGroupRateRepo:  repo,
+			userGroupRateCache: gocache.New(time.Minute, 0),
+			cfg: &config.Config{
+				Gateway: config.GatewayConfig{
+					UserGroupRateCacheTTLSeconds: 30,
+				},
 			},
-		},
-	}
+		}
 
-	const concurrent = 12
-	results := make([]float64, concurrent)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(concurrent)
-	for i := 0; i < concurrent; i++ {
-		go func(idx int) {
-			defer wg.Done()
-			<-start
-			results[idx] = svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
-		}(i)
-	}
+		const concurrent = 12
+		results := make([]float64, concurrent)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(concurrent)
+		for i := 0; i < concurrent; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				<-start
+				results[idx] = svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
+			}(i)
+		}
 
-	close(start)
-	// Wait for every caller to have recorded its cache miss before releasing the
-	// loader. A fixed sleep raced here: a goroutine that reached the cache after
-	// the singleflight load had already finished got a hit instead of a miss, and
-	// the miss assertion below saw 11 of 12. The miss counter is the observable
-	// that says "all callers are now inside the singleflight group".
-	require.Eventually(t, func() bool {
-		_, miss, _, _, _ := GatewayUserGroupRateCacheStats()
-		return miss == int64(concurrent)
-	}, 5*time.Second, time.Millisecond, "all callers must miss the cache before the loader is released")
-	close(unblock)
-	wg.Wait()
+		close(start)
+		// 缓存 miss 发生在进入 singleflight 之前，计数不能证明等待者已入组。
+		// synctest 等所有调用真正阻塞后再释放 loader，避免调度时序导致偶发失败。
+		synctest.Wait()
+		_, misses, _, _, _ := GatewayUserGroupRateCacheStats()
+		require.Equal(t, int64(concurrent), misses)
+		close(unblock)
+		wg.Wait()
 
-	for _, got := range results {
+		for _, got := range results {
+			require.Equal(t, rate, got)
+		}
+		require.Equal(t, int64(1), repo.calls.Load())
+
+		// 再次读取应命中缓存，不再回源。
+		got := svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
 		require.Equal(t, rate, got)
-	}
-	require.Equal(t, int64(1), repo.calls.Load())
+		require.Equal(t, int64(1), repo.calls.Load())
 
-	// 再次读取应命中缓存，不再回源。
-	got := svc.getUserGroupRateMultiplier(context.Background(), 101, 202, 1.2)
-	require.Equal(t, rate, got)
-	require.Equal(t, int64(1), repo.calls.Load())
-
-	hit, miss, load, sfShared, fallback := GatewayUserGroupRateCacheStats()
-	require.GreaterOrEqual(t, hit, int64(1))
-	require.Equal(t, int64(12), miss)
-	require.Equal(t, int64(1), load)
-	require.GreaterOrEqual(t, sfShared, int64(1))
-	require.Equal(t, int64(0), fallback)
+		hit, miss, load, sfShared, fallback := GatewayUserGroupRateCacheStats()
+		require.GreaterOrEqual(t, hit, int64(1))
+		require.Equal(t, int64(12), miss)
+		require.Equal(t, int64(1), load)
+		require.GreaterOrEqual(t, sfShared, int64(1))
+		require.Equal(t, int64(0), fallback)
+	})
 }
 
 func TestGetUserGroupRateMultiplier_FallbackOnRepoError(t *testing.T) {

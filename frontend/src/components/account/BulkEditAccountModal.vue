@@ -31,6 +31,30 @@
         </p>
       </div>
 
+      <!-- Native 原生链路模式 -->
+      <div
+        v-if="allNativeWireCapable"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="mb-3 flex items-center justify-between gap-4">
+          <div class="flex-1">
+            <label class="input-label mb-0">修改原生链路模式</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              仅同一平台的 OAuth 账号可批量设置；Native 同时绑定对应的 TLS 模板。
+            </p>
+          </div>
+          <input v-model="enableNativeWireMode" data-testid="bulk-native-enabled" type="checkbox" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+        </div>
+        <div :class="!enableNativeWireMode && 'pointer-events-none opacity-50'" class="flex gap-2">
+          <button type="button" data-testid="bulk-native-stock" class="btn btn-sm" :class="nativeWireMode === 'sub2api' ? 'btn-primary' : 'btn-secondary'" @click="nativeWireMode = 'sub2api'">Sub2API</button>
+          <button type="button" data-testid="bulk-native-native" class="btn btn-sm" :class="nativeWireMode === 'native' ? 'btn-primary' : 'btn-secondary'" @click="nativeWireMode = 'native'">Native</button>
+        </div>
+        <select v-if="enableNativeWireMode && nativeWireMode === 'native'" v-model.number="nativeTLSProfileID" data-testid="bulk-native-tls-profile-select" class="input mt-3">
+          <option :value="null">选择已验证的 {{ targetSelectedPlatforms[0] === 'openai' ? 'Codex' : 'Claude' }} TLS 模板</option>
+          <option v-for="profile in selectableNativeTLSProfiles" :key="profile.id" :value="profile.id">{{ profile.name }} ({{ profile.native_versions?.join(', ') }})</option>
+        </select>
+      </div>
+
       <!-- OpenAI passthrough -->
       <div
         v-if="allOpenAIPassthroughCapable"
@@ -1563,6 +1587,13 @@ const allOpenAIPassthroughCapable = computed(() => {
   )
 })
 
+const allNativeWireCapable = computed(() =>
+  targetSelectedPlatforms.value.length === 1 &&
+  (targetSelectedPlatforms.value[0] === 'openai' || targetSelectedPlatforms.value[0] === 'anthropic') &&
+  targetSelectedTypes.value.length > 0 &&
+  targetSelectedTypes.value.every(t => t === 'oauth' || t === 'setup-token')
+)
+
 const allOpenAIOAuth = computed(() => {
   return (
     targetSelectedPlatforms.value.length === 1 &&
@@ -1658,6 +1689,11 @@ const enableRateMultiplier = ref(false)
 const enableStatus = ref(false)
 const enableGroups = ref(false)
 const enableOpenAIPassthrough = ref(false)
+const enableNativeWireMode = ref(false)
+const nativeTLSProfileID = ref<number | null>(null)
+const nativeTLSProfiles = ref<{ id: number; name: string; native_family?: string; native_versions?: string[] }[]>([])
+const selectableNativeTLSProfiles = computed(() => nativeTLSProfiles.value.filter(profile =>
+  profile.native_family === (targetSelectedPlatforms.value[0] === 'openai' ? 'codex' : 'claude')))
 const enableOpenAIFlattenNamespaces = ref(false)
 const enableOpenAILongContextBilling = ref(false)
 const enableOpenAIEndpointCapabilities = ref(false)
@@ -1693,6 +1729,7 @@ const rateMultiplier = ref(1)
 const status = ref<'active' | 'inactive'>('active')
 const groupIds = ref<number[]>([])
 const openaiPassthroughEnabled = ref(false)
+const nativeWireMode = ref<'native' | 'sub2api'>('sub2api')
 // Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -1984,6 +2021,16 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     }
   }
 
+  if (enableNativeWireMode.value && allNativeWireCapable.value) {
+    const extra = ensureExtra()
+    if (nativeWireMode.value === 'native') {
+      extra.native_wire_mode = 'native'
+      extra.enable_tls_fingerprint = true
+      extra.tls_fingerprint_profile_id = nativeTLSProfileID.value
+    }
+    else extra.native_wire_mode = 'sub2api'
+  }
+
   // 同时校验可见性：勾选后又改了目标筛选条件时，不应把该键写到非 OAuth 账号上
   if (enableOpenAIFlattenNamespaces.value && allOpenAIOAuthOnly.value) {
     const extra = ensureExtra()
@@ -2202,6 +2249,7 @@ const handleSubmit = async () => {
 
   const hasAnyFieldEnabled =
     enableBaseUrl.value ||
+    (enableNativeWireMode.value && allNativeWireCapable.value) ||
     enableOpenAIPassthrough.value ||
     enableOpenAIFlattenNamespaces.value ||
     (enableOpenAILongContextBilling.value && allOpenAIPassthroughCapable.value) ||
@@ -2231,6 +2279,11 @@ const handleSubmit = async () => {
 
   if (!hasAnyFieldEnabled) {
     appStore.showError(t('admin.accounts.bulkEdit.noFieldsSelected'))
+    return
+  }
+  if (enableNativeWireMode.value && nativeWireMode.value === 'native' &&
+    !selectableNativeTLSProfiles.value.some(profile => profile.id === nativeTLSProfileID.value)) {
+    appStore.showError('Native 模式必须选择已验证的 TLS 模板')
     return
   }
 
@@ -2350,6 +2403,11 @@ const handleMixedChannelCancel = () => {
 watch(
   () => props.show,
   (newShow) => {
+    if (newShow) {
+      adminAPI.tlsFingerprintProfiles.list()
+        .then(profiles => { nativeTLSProfiles.value = profiles.map(p => ({ id: p.id, name: p.name, native_family: p.native_family, native_versions: p.native_versions })) })
+        .catch(() => { nativeTLSProfiles.value = [] })
+    }
     if (!newShow) {
       // Reset all enable flags
       enableBaseUrl.value = false
@@ -2365,6 +2423,7 @@ watch(
       enableStatus.value = false
       enableGroups.value = false
       enableOpenAIPassthrough.value = false
+      enableNativeWireMode.value = false
       enableOpenAIFlattenNamespaces.value = false
       enableOpenAILongContextBilling.value = false
       enableOpenAIEndpointCapabilities.value = false
@@ -2383,6 +2442,8 @@ watch(
       // Reset all values
       baseUrl.value = ''
       openaiPassthroughEnabled.value = false
+      nativeWireMode.value = 'sub2api'
+      nativeTLSProfileID.value = null
       openaiFlattenNamespacesEnabled.value = false
       openAILongContextBillingEnabled.value = false
       openAIEndpointCapabilities.value = ['chat_completions', 'embeddings']
@@ -2421,6 +2482,7 @@ watch(
       pendingUpdatesForConfirm.value = null
       mixedChannelConfirmed.value = false
     }
-  }
+  },
+  { immediate: true }
 )
 </script>

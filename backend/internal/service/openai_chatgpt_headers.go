@@ -11,6 +11,9 @@ func setOpenAIChatGPTAccountHeaders(headers http.Header, account *Account) {
 	}
 	if chatgptAccountID := account.GetChatGPTAccountID(); chatgptAccountID != "" {
 		headers.Set("chatgpt-account-id", chatgptAccountID)
+	} else {
+		// 所选凭据没有账号 ID 时，清除不属于它的入站身份。
+		headers.Del("chatgpt-account-id")
 	}
 	if account.IsChatGPTAccountFedRAMP() {
 		headers.Set("x-openai-fedramp", "true")

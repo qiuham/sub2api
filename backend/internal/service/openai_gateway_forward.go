@@ -19,6 +19,9 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	if _, err := nativeTLSProfile(c, account, s.tlsFPProfileService); err != nil {
+		return nil, rejectNativeTLSProfile(c, err)
+	}
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -56,6 +59,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			},
 		})
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
+	}
+
+	// Native accounts must enter the passthrough path before any compatibility
+	// normalization (legacy ingress, reasoning, tool schemas, Responses Lite,
+	// namespace flattening, or image adaptation). Authentication, usage, and
+	// failover remain in forwardOpenAIPassthrough; the client body is untouched.
+	if account != nil && account.IsNativeWireEnabled() {
+		nativeModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		nativeStream := gjson.GetBytes(body, "stream").Bool()
+		return s.forwardOpenAIPassthrough(
+			ctx, c, account, body, body, nativeModel, false, nil, nativeStream, startTime,
+		)
 	}
 
 	normalizedBody, normalized, err := normalizeOpenAICodexCompactReasoningEffortForAccount(c, account, body)

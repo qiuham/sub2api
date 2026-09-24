@@ -24,6 +24,9 @@ vi.mock('@/api/admin', () => ({
     accounts: {
       bulkUpdate: vi.fn(),
       checkMixedChannelRisk: vi.fn()
+    },
+    tlsFingerprintProfiles: {
+      list: vi.fn().mockResolvedValue([{ id: 7, name: 'codex-verified', native_family: 'codex', native_versions: ['0.156.1'] }])
     }
   }
 }))
@@ -96,6 +99,47 @@ describe('BulkEditAccountModal', () => {
     vi.mocked(adminAPI.accounts.checkMixedChannelRisk).mockResolvedValue({
       has_risk: false
     } as any)
+  })
+
+  it('批量 Native 必须选择模板，并联动保存 TLS 字段', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await flushPromises()
+    await wrapper.get('[data-testid="bulk-native-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-native-native"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+    showError.mockClear()
+    await wrapper.get('[data-testid="bulk-native-tls-profile-select"]').setValue('7')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(showError.mock.calls).toEqual([])
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: { native_wire_mode: 'native', enable_tls_fingerprint: true, tls_fingerprint_profile_id: 7 }
+    })
+  })
+
+  it('Claude 批量 Native 不展示或接受 Codex 模板', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['anthropic'], selectedTypes: ['oauth'] })
+    await flushPromises()
+    await wrapper.get('[data-testid="bulk-native-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-native-native"]').trigger('click')
+    expect(wrapper.get('[data-testid="bulk-native-tls-profile-select"]').find('option[value="7"]').exists()).toBe(false)
+    ;(wrapper.vm as any).nativeTLSProfileID = 7
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    expect(adminAPI.accounts.bulkUpdate).not.toHaveBeenCalled()
+  })
+
+  it('批量关闭 Native 显式写入 stock，混合平台不提供统一模板', async () => {
+    const mixed = mountModal({ selectedPlatforms: ['openai', 'anthropic'], selectedTypes: ['oauth'] })
+    expect(mixed.find('[data-testid="bulk-native-enabled"]').exists()).toBe(false)
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
+    await wrapper.get('[data-testid="bulk-native-enabled"]').setValue(true)
+    await wrapper.get('[data-testid="bulk-native-stock"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      extra: { native_wire_mode: 'sub2api' }
+    })
   })
 
   it('批量修改倍率时提示自动同步账号需要先关闭同步', async () => {

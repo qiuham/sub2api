@@ -112,6 +112,19 @@
                       : t('version.upToDate')
                   }}
                 </p>
+                <p
+                  v-if="upstreamLatestVersion"
+                  class="mt-2 rounded bg-blue-50 px-2 py-1 text-xs text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+                >
+                  上游 Wei-Shaw/sub2api：v{{ upstreamLatestVersion }}{{ hasUpstreamUpdate ? '，有新版本待手动合并' : '，当前基线已同步' }}
+                  <a
+                    v-if="upstreamReleaseInfo?.html_url"
+                    :href="upstreamReleaseInfo.html_url"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="underline"
+                  >查看</a>
+                </p>
               </div>
 
               <!-- Priority 1: Update error (must check before hasUpdate) -->
@@ -374,8 +387,10 @@
                   {{ t('version.viewRelease') }}
                 </a>
 
+
+              </div>
                 <!-- Version rollback entry -->
-                <div class="border-t border-gray-100 pt-2 dark:border-dark-700">
+              <div v-if="!updateSuccess" class="border-t border-gray-100 pt-2 dark:border-dark-700">
                   <button
                     @click="toggleRollbackPanel"
                     class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
@@ -623,7 +638,6 @@
                     </div>
                   </transition>
                 </div>
-              </div>
             </template>
           </div>
         </div>
@@ -651,9 +665,9 @@ import {
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
 
-const GITHUB_REPO = 'Wei-Shaw/sub2api'
+const GITHUB_REPO = 'qiuham/sub2api'
 // Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
-const DOCKER_IMAGE = 'weishaw/sub2api'
+const DOCKER_IMAGE = 'qiuham/sub2api'
 
 const { t } = useI18n()
 
@@ -675,6 +689,9 @@ const currentVersion = computed(() => appStore.currentVersion || props.version |
 const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
+const upstreamLatestVersion = computed(() => appStore.upstreamLatestVersion)
+const hasUpstreamUpdate = computed(() => appStore.hasUpstreamUpdate)
+const upstreamReleaseInfo = computed(() => appStore.upstreamReleaseInfo)
 const buildType = computed(() => appStore.buildType)
 
 // Update process states (local to this component)

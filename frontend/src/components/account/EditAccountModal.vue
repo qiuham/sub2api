@@ -1769,6 +1769,76 @@
         </div>
       </div>
 
+      <!-- Native 原生链路模式（Claude / Codex OAuth） -->
+      <div
+        v-if="(account?.platform === 'openai' || account?.platform === 'anthropic') && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">原生链路模式</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              原样透传官方客户端请求；关闭时使用 Sub2API 兼容链路。
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="edit-native-wire-toggle"
+            role="switch"
+            :aria-checked="nativeWireMode === 'native'"
+            @click="toggleNativeWireMode"
+            :class="[
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+              nativeWireMode === 'native' ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+            ]"
+          >
+            <span
+              :class="[
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                nativeWireMode === 'native' ? 'translate-x-5' : 'translate-x-0'
+              ]"
+            />
+          </button>
+        </div>
+        <!-- TLS Fingerprint -->
+        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
+          <div class="flex items-center justify-between">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.quotaControl.tlsFingerprint.hint') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              :disabled="nativeWireMode === 'native'"
+              @click="tlsFingerprintEnabled = !tlsFingerprintEnabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                tlsFingerprintEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  tlsFingerprintEnabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <!-- Profile selector -->
+          <div v-if="tlsFingerprintEnabled || nativeWireMode === 'native'" class="mt-3">
+            <p v-if="nativeWireMode === 'native'" class="input-hint">Native 必须绑定与客户端版本匹配的已验证模板。</p>
+            <select v-model="tlsFingerprintProfileId" data-testid="edit-native-tls-profile-select" class="input">
+              <option v-if="nativeWireMode !== 'native'" :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
+              <option v-if="nativeWireMode !== 'native' && tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
+              <option v-for="p in selectableTLSProfiles" :key="p.id" :value="p.id">{{ p.name }}{{ p.native_versions?.length ? ` (${p.native_versions.join(', ')})` : '' }}</option>
+            </select>
+          </div>
+        </div>
+
+      </div>
+
       <!-- OpenAI Codex namespace 工具摊平（兼容开关，仅 OAuth） -->
       <div
         v-if="account?.platform === 'openai' && account?.type === 'oauth'"
@@ -2838,41 +2908,6 @@
           </div>
         </div>
 
-        <!-- TLS Fingerprint -->
-        <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
-          <div class="flex items-center justify-between">
-            <div>
-              <label class="input-label mb-0">{{ t('admin.accounts.quotaControl.tlsFingerprint.label') }}</label>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.accounts.quotaControl.tlsFingerprint.hint') }}
-              </p>
-            </div>
-            <button
-              type="button"
-              @click="tlsFingerprintEnabled = !tlsFingerprintEnabled"
-              :class="[
-                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
-                tlsFingerprintEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
-              ]"
-            >
-              <span
-                :class="[
-                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
-                  tlsFingerprintEnabled ? 'translate-x-5' : 'translate-x-0'
-                ]"
-              />
-            </button>
-          </div>
-          <!-- Profile selector -->
-          <div v-if="tlsFingerprintEnabled" class="mt-3">
-            <select v-model="tlsFingerprintProfileId" class="input">
-              <option :value="null">{{ t('admin.accounts.quotaControl.tlsFingerprint.defaultProfile') }}</option>
-              <option v-if="tlsFingerprintProfiles.length > 0" :value="-1">{{ t('admin.accounts.quotaControl.tlsFingerprint.randomProfile') }}</option>
-              <option v-for="p in tlsFingerprintProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
-            </select>
-          </div>
-        </div>
-
         <!-- Session ID Masking -->
         <div class="rounded-lg border border-gray-200 p-4 dark:border-dark-600">
           <div class="flex items-center justify-between">
@@ -3673,7 +3708,10 @@ const umqModeOptions = computed(() => [
 ])
 const tlsFingerprintEnabled = ref(false)
 const tlsFingerprintProfileId = ref<number | null>(null)
-const tlsFingerprintProfiles = ref<{ id: number; name: string }[]>([])
+const tlsFingerprintProfiles = ref<{ id: number; name: string; native_family?: string; native_versions?: string[] }[]>([])
+const selectableTLSProfiles = computed(() => nativeWireMode.value === 'native'
+  ? tlsFingerprintProfiles.value.filter(p => p.native_family === (props.account?.platform === 'openai' ? 'codex' : 'claude'))
+  : tlsFingerprintProfiles.value)
 const sessionIdMaskingEnabled = ref(false)
 const cacheTTLOverrideEnabled = ref(false)
 const cacheTTLOverrideTarget = ref<string>('5m')
@@ -3682,6 +3720,11 @@ const customBaseUrl = ref('')
 
 // OpenAI 自动透传开关（OAuth/API Key）
 const openaiPassthroughEnabled = ref(false)
+const nativeWireMode = ref<'native' | 'sub2api'>('sub2api')
+const toggleNativeWireMode = () => {
+  nativeWireMode.value = nativeWireMode.value === 'native' ? 'sub2api' : 'native'
+  if (nativeWireMode.value === 'native') tlsFingerprintEnabled.value = true
+}
 // OpenAI Codex namespace 工具摊平兼容开关（仅 OAuth），缺省关闭即原样保留
 const openaiFlattenNamespacesEnabled = ref(false)
 const openAILongContextBillingEnabled = ref(false)
@@ -4170,6 +4213,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
   // Load OpenAI passthrough toggle (OpenAI OAuth/SetupToken/API Key)
   openaiPassthroughEnabled.value = false
+  nativeWireMode.value = 'sub2api'
   openaiFlattenNamespacesEnabled.value = false
   openAILongContextBillingEnabled.value = false
   editPlanType.value = ''
@@ -4245,6 +4289,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     if (compactMappings && typeof compactMappings === 'object') {
       openAICompactModelMappings.value = Object.entries(compactMappings).map(([from, to]) => ({ from, to }))
     }
+  }
+  if ((newAccount.platform === 'openai' || newAccount.platform === 'anthropic') && (newAccount.type === 'oauth' || newAccount.type === 'setup-token')) {
+    nativeWireMode.value = extra?.native_wire_mode === 'native' ? 'native' : 'sub2api'
   }
   if (newAccount.platform === 'anthropic' && newAccount.type === 'apikey') {
     anthropicPassthroughEnabled.value = extra?.anthropic_passthrough === true
@@ -4542,7 +4589,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 async function loadTLSProfiles() {
   try {
     const profiles = await adminAPI.tlsFingerprintProfiles.list()
-    tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name }))
+    tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name, native_family: p.native_family, native_versions: p.native_versions }))
   } catch {
     tlsFingerprintProfiles.value = []
   }
@@ -4886,6 +4933,10 @@ function loadQuotaControlSettings(account: Account) {
   customBaseUrlEnabled.value = false
   customBaseUrl.value = ''
 
+  // TLS templates also apply to OpenAI Native accounts, not only Anthropic.
+  tlsFingerprintEnabled.value = account.enable_tls_fingerprint === true
+  tlsFingerprintProfileId.value = account.tls_fingerprint_profile_id ?? null
+
   // Remaining quota control settings only apply to Anthropic accounts
   if (account.platform !== 'anthropic') {
     return
@@ -4919,12 +4970,6 @@ function loadQuotaControlSettings(account: Account) {
 
   // UMQ mode（独立于 RPM 加载，防止编辑无 RPM 账号时丢失已有配置）
   userMsgQueueMode.value = account.user_msg_queue_mode ?? ''
-
-  // Load TLS fingerprint setting
-  if (account.enable_tls_fingerprint === true) {
-    tlsFingerprintEnabled.value = true
-  }
-  tlsFingerprintProfileId.value = account.tls_fingerprint_profile_id ?? null
 
   // Load session ID masking setting
   if (account.session_id_masking_enabled === true) {
@@ -5126,6 +5171,10 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
 
 const handleSubmit = async () => {
   if (!props.account) return
+  if (nativeWireMode.value === 'native' && !selectableTLSProfiles.value.some(p => p.id === tlsFingerprintProfileId.value)) {
+    appStore.showError('Native 模式必须选择已验证的 TLS 模板')
+    return
+  }
   const accountID = props.account.id
 
   if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
@@ -5530,7 +5579,8 @@ const handleSubmit = async () => {
 
     // For antigravity accounts, handle mixed_scheduling and allow_overages in extra
     if (props.account.platform === 'antigravity') {
-      const currentExtra = (props.account.extra as Record<string, unknown>) || {}
+      const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
+        ((props.account.extra as Record<string, unknown>) || {})
       const newExtra: Record<string, unknown> = { ...currentExtra }
       if (mixedScheduling.value) {
         newExtra.mixed_scheduling = true
@@ -5851,6 +5901,32 @@ const handleSubmit = async () => {
         delete newExtra.upstream_request_id_header
       }
       updatePayload.extra = newExtra
+    }
+
+    // Apply this last: platform-specific editors also rebuild extra above.
+    if ((props.account.platform === 'openai' || props.account.platform === 'anthropic') &&
+      (props.account.type === 'oauth' || props.account.type === 'setup-token')) {
+      const extra = { ...((updatePayload.extra as Record<string, unknown> | undefined) ??
+        (props.account.extra as Record<string, unknown> | undefined) ?? {}) }
+      if (nativeWireMode.value === 'native') extra.native_wire_mode = 'native'
+      else delete extra.native_wire_mode
+      if (nativeWireMode.value === 'native') {
+        extra.enable_tls_fingerprint = true
+        if (tlsFingerprintProfileId.value != null && tlsFingerprintProfileId.value > 0) {
+          extra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
+        }
+      } else if (props.account.platform === 'openai') {
+        if (tlsFingerprintEnabled.value) {
+          extra.enable_tls_fingerprint = true
+          if (tlsFingerprintProfileId.value != null && tlsFingerprintProfileId.value > 0) {
+            extra.tls_fingerprint_profile_id = tlsFingerprintProfileId.value
+          } else delete extra.tls_fingerprint_profile_id
+        } else {
+          delete extra.enable_tls_fingerprint
+          delete extra.tls_fingerprint_profile_id
+        }
+      }
+      updatePayload.extra = extra
     }
 
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {

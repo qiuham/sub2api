@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,6 +55,58 @@ func TestOpenAIWSConnPool_NextConnIDFormat(t *testing.T) {
 	require.NotEqual(t, id1, id2)
 	require.Equal(t, "oa_ws_42_1", id1)
 	require.Equal(t, "oa_ws_42_2", id2)
+}
+
+func TestNativeWSConnPoolRebuildsWhenTLSProfileChanges(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	pool := newOpenAIWSConnPool(cfg)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	account := &Account{ID: 71, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: map[string]any{"native_wire_mode": "native"}}
+	firstProfile := tlsfingerprint.VerifiedNativeProfile("codex", "0.156.1")
+	req := openAIWSAcquireRequest{Account: account, TLSProfile: firstProfile,
+		WSURL: "wss://example.com/v1/responses", Headers: http.Header{"User-Agent": {"codex_cli_rs/0.156.1"}}}
+	first, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	firstID := first.ConnID()
+	first.Release()
+
+	changedProfile := *firstProfile
+	changedProfile.CipherSuites = append([]uint16(nil), firstProfile.CipherSuites...)
+	changedProfile.CipherSuites[0], changedProfile.CipherSuites[1] = changedProfile.CipherSuites[1], changedProfile.CipherSuites[0]
+	req.TLSProfile = &changedProfile
+	second, err := pool.Acquire(context.Background(), req)
+	require.NoError(t, err)
+	defer second.Release()
+	require.False(t, second.Reused(), "profile edit must not reuse the old WS handshake")
+	require.NotEqual(t, firstID, second.ConnID())
+	require.Equal(t, 2, dialer.DialCount())
+}
+
+func TestNativeWSCompatibilitySeparatesStockMode(t *testing.T) {
+	account := &Account{ID: 71, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: map[string]any{"native_wire_mode": "native"}}
+	req := openAIWSAcquireRequest{Account: account, WSURL: "wss://example.com/v1/responses"}
+	nativeKey := normalizeOpenAIWSAcquireCompatibility(req)
+	account.Extra["native_wire_mode"] = "sub2api"
+	stockKey := normalizeOpenAIWSAcquireCompatibility(req)
+	require.NotEqual(t, nativeKey, stockKey)
+	require.False(t, sameOpenAIWSPrewarmTarget(openAIWSAcquireRequest{Account: &Account{ID: 71, Extra: map[string]any{"native_wire_mode": "native"}}, WSURL: req.WSURL}, req))
+}
+
+func TestNativeWSCompatibilitySeparatesTargetAndProxy(t *testing.T) {
+	account := &Account{ID: 71, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Extra: map[string]any{"native_wire_mode": "native"}}
+	base := openAIWSAcquireRequest{Account: account, WSURL: "wss://example.com/v1/responses"}
+	otherTarget := base
+	otherTarget.WSURL = "wss://other.example.com/v1/responses"
+	otherProxy := base
+	otherProxy.ProxyURL = "http://proxy.example.com:3128"
+	require.NotEqual(t, normalizeOpenAIWSAcquireCompatibility(base), normalizeOpenAIWSAcquireCompatibility(otherTarget))
+	require.NotEqual(t, normalizeOpenAIWSAcquireCompatibility(base), normalizeOpenAIWSAcquireCompatibility(otherProxy))
 }
 
 func TestOpenAIWSConnPool_AcquireCleanupInterval(t *testing.T) {

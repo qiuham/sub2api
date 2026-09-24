@@ -11,10 +11,14 @@
         <p class="text-sm text-gray-500 dark:text-gray-400">
           {{ t('admin.tlsFingerprintProfiles.description') }}
         </p>
-        <button @click="showCreateModal = true" class="btn btn-primary btn-sm">
-          <Icon name="plus" size="sm" class="mr-1" />
-          {{ t('admin.tlsFingerprintProfiles.createProfile') }}
-        </button>
+        <div class="flex gap-2">
+          <button @click="createNativeProfile('claude')" :disabled="submitting" class="btn btn-secondary btn-sm">Native Claude</button>
+          <button @click="createNativeProfile('codex')" :disabled="submitting" class="btn btn-secondary btn-sm">Native Codex</button>
+          <button @click="showCreateModal = true" class="btn btn-primary btn-sm">
+            <Icon name="plus" size="sm" class="mr-1" />
+            {{ t('admin.tlsFingerprintProfiles.createProfile') }}
+          </button>
+        </div>
       </div>
 
       <!-- Profiles Table -->
@@ -59,6 +63,9 @@
             <tr v-for="profile in profiles" :key="profile.id" class="hover:bg-gray-50 dark:hover:bg-dark-700">
               <td class="px-3 py-2">
                 <div class="font-medium text-gray-900 dark:text-white text-sm">{{ profile.name }}</div>
+                <div v-if="profile.native_family" class="mt-1 text-xs text-primary-600 dark:text-primary-400">
+                  Native {{ profile.native_family === 'codex' ? 'Codex' : 'Claude' }} · {{ profile.native_versions?.join(', ') }}
+                </div>
               </td>
               <td class="px-3 py-2">
                 <div v-if="profile.description" class="text-sm text-gray-500 dark:text-gray-400 max-w-xs truncate">
@@ -379,13 +386,6 @@ const form = reactive({
   enable_grease: false
 })
 
-// Load profiles when dialog opens
-watch(() => props.show, (newVal) => {
-  if (newVal) {
-    loadProfiles()
-  }
-})
-
 const loadProfiles = async () => {
   loading.value = true
   try {
@@ -395,6 +395,23 @@ const loadProfiles = async () => {
     console.error('Error loading TLS fingerprint profiles:', error)
   } finally {
     loading.value = false
+  }
+}
+
+// Load profiles when dialog opens, including an initially visible dialog.
+watch(() => props.show, (newVal) => {
+  if (newVal) loadProfiles()
+}, { immediate: true })
+
+const createNativeProfile = async (family: 'claude' | 'codex') => {
+  submitting.value = true
+  try {
+    await adminAPI.tlsFingerprintProfiles.createNative(family)
+    await loadProfiles()
+  } catch (error: any) {
+    appStore.showError(error.response?.data?.detail || t('admin.tlsFingerprintProfiles.saveFailed'))
+  } finally {
+    submitting.value = false
   }
 }
 

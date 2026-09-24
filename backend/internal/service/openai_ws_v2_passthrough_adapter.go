@@ -876,6 +876,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
+		if account != nil && account.IsNativeWireEnabled() {
+			dialCtx = withNativeWSProfile(dialCtx, s.tlsFPProfileService.ResolveTLSProfile(account))
+		}
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		cancelDial()
 		if err == nil {

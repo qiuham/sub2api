@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unsafe"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/nativewire"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -88,6 +89,18 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	routingModel string,
 	routingServiceTier string,
 ) (http.Header, openAIWSSessionHeaderResolution, error) {
+	if account != nil && account.IsNativeWireEnabled() {
+		headers := make(http.Header)
+		resolution := resolveOpenAIWSSessionHeaders(c, promptCacheKey)
+		if c != nil && c.Request != nil {
+			nativewire.CopyRequestHeaders(headers, c.Request.Header)
+		}
+		headers.Set("Authorization", "Bearer "+token)
+		if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
+			return nil, resolution, fmt.Errorf("resolve chatgpt account headers: %w", err)
+		}
+		return headers, resolution, nil
+	}
 	headers := make(http.Header)
 	if account == nil || !account.IsOpenAIAgentIdentity() {
 		headers.Set("authorization", "Bearer "+token)

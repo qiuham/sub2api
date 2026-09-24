@@ -1013,6 +1013,20 @@ func (a *Account) GetExtraString(key string) string {
 	return ""
 }
 
+// GetWireMode returns the account-scoped wire forwarding mode.  The value is
+// intentionally kept in Extra so switching an account between the stock
+// compatibility path and the native official-client path needs no schema
+// migration.  Unknown values are treated as the stock path.
+func (a *Account) GetWireMode() string {
+	mode := strings.ToLower(strings.TrimSpace(a.GetExtraString("native_wire_mode")))
+	if mode == "native" {
+		return "native"
+	}
+	return "sub2api"
+}
+
+func (a *Account) IsNativeWireEnabled() bool { return a.GetWireMode() == "native" }
+
 func (a *Account) GetClaudeUserID() string {
 	if v := strings.TrimSpace(a.GetExtraString("claude_user_id")); v != "" {
 		return v
@@ -2100,6 +2114,9 @@ func (a *Account) IsOpenAIPassthroughEnabled() bool {
 	if a == nil || !a.IsOpenAI() || a.Extra == nil {
 		return false
 	}
+	if a.IsNativeWireEnabled() {
+		return true
+	}
 	if enabled, ok := a.Extra["openai_passthrough"].(bool); ok {
 		return enabled
 	}
@@ -2385,12 +2402,11 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 	return a.Platform == PlatformAnthropic && (a.Type == AccountTypeOAuth || a.Type == AccountTypeSetupToken)
 }
 
-// IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
-// 仅适用于 Anthropic OAuth/SetupToken 类型账号
-// 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
+// IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装。
+// Anthropic OAuth/SetupToken 和 OpenAI OAuth/SetupToken 均可绑定各自的
+// 出站 Profile；Profile 本身决定具体客户端（Claude/Codex）特征。
 func (a *Account) IsTLSFingerprintEnabled() bool {
-	// 仅支持 Anthropic OAuth/SetupToken 账号
-	if !a.IsAnthropicOAuthOrSetupToken() {
+	if !a.IsAnthropicOAuthOrSetupToken() && !a.IsOpenAIOAuthLike() {
 		return false
 	}
 	if a.Extra == nil {

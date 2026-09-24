@@ -78,6 +78,38 @@ func newRollbackTestService(current string, releases []*GitHubRelease) *UpdateSe
 	)
 }
 
+func TestNativeVersionOrdering(t *testing.T) {
+	require.Less(t, compareVersions("0.2.8-N.2", "0.2.8-N.3"), 0)
+	require.Greater(t, compareVersions("0.2.8-N.3", "0.2.8-N.2"), 0)
+	require.Less(t, compareVersions("0.2.8-N.3", "0.2.9-N.1"), 0)
+	require.Equal(t, 0, compareUpstreamVersion("0.2.8-N.3", "0.2.8"))
+	require.Less(t, compareUpstreamVersion("0.2.8-N.3", "0.2.9"), 0)
+}
+
+func TestNativeUpdateDetection(t *testing.T) {
+	svc := NewUpdateService(&updateServiceCacheStub{}, &updateServiceGitHubClientStub{
+		release: &GitHubRelease{TagName: "v0.2.8-N.3"},
+	}, "0.2.8-N.2", "release")
+	info, err := svc.fetchLatestRelease(context.Background(), githubRepo)
+	require.NoError(t, err)
+	require.True(t, info.HasUpdate)
+	require.Equal(t, "0.2.8-N.3", info.LatestVersion)
+}
+
+func TestNativeRollbackVersions(t *testing.T) {
+	svc := newRollbackTestService("0.2.8-N.4", []*GitHubRelease{
+		{TagName: "v0.2.8-N.4"},
+		{TagName: "v0.2.8-N.3"},
+		{TagName: "v0.2.8-N.2"},
+		{TagName: "v0.2.8-N.1"},
+		{TagName: "v0.2.8-N.5", Prerelease: true},
+	})
+	versions, err := svc.ListRollbackVersions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, versions, 3)
+	require.Equal(t, []string{"0.2.8-N.3", "0.2.8-N.2", "0.2.8-N.1"}, []string{versions[0].Version, versions[1].Version, versions[2].Version})
+}
+
 func TestUpdateServiceListRollbackVersionsFiltersAndCaps(t *testing.T) {
 	releases := []*GitHubRelease{
 		{TagName: "v0.1.148", PublishedAt: "2026-07-09T00:00:00Z"},                       // newer than current: excluded

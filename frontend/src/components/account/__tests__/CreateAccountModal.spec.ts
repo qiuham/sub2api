@@ -9,6 +9,7 @@ const {
   showWarningMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  listTLSProfilesMock,
   authIsSimpleMode,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   showWarningMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  listTLSProfilesMock: vi.fn(),
   authIsSimpleMode: { value: true },
 }))
 
@@ -51,7 +53,7 @@ vi.mock('@/api/admin', () => ({
       getSettings: vi.fn().mockResolvedValue({}),
     },
     tlsFingerprintProfiles: {
-      list: vi.fn().mockResolvedValue([]),
+      list: listTLSProfilesMock,
     },
   },
 }))
@@ -197,6 +199,7 @@ async function openCodexImportStep(toggleClicks = 0) {
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'codex-verified', native_family: 'codex', native_versions: ['0.156.1'] }])
     createAccountMock.mockReset().mockResolvedValue({ id: 42, platform: 'openai', type: 'apikey' })
     probeUpstreamBillingMock.mockReset().mockResolvedValue({})
     syncUpstreamModelsMock.mockReset().mockResolvedValue({ models: [], metadata: {} })
@@ -669,6 +672,55 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
     expect(importCodexSessionMock).toHaveBeenCalledTimes(1)
     expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBeUndefined()
+  })
+
+  it('passes Native mode from account creation to Codex session import', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    await flushPromises()
+    ;(wrapper.vm as any).tlsFingerprintProfileId = 7
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Codex import')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+
+    expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.native_wire_mode).toBe('native')
+    expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.enable_tls_fingerprint).toBe(true)
+    expect(importCodexSessionMock.mock.calls[0]?.[0]?.extra?.tls_fingerprint_profile_id).toBe(7)
+  })
+
+  it('does not advance Native account creation without a TLS template', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Codex import')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    expect(wrapper.find('[data-testid="import-codex-session"]').exists()).toBe(false)
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('does not accept a Codex template for Claude Native creation', async () => {
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    expect(wrapper.get('[data-testid="create-native-tls-profile-select"]').find('option[value="7"]').exists()).toBe(false)
+    ;(wrapper.vm as any).tlsFingerprintProfileId = 7
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Claude')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('shows the Claude template and version when creating a Claude Native account', async () => {
+    listTLSProfilesMock.mockResolvedValue([{ id: 8, name: 'claude-verified', native_family: 'claude', native_versions: ['2.1.281'] }])
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="create-native-wire-toggle"]').trigger('click')
+    const select = wrapper.get('[data-testid="create-native-tls-profile-select"]')
+    expect(select.find('option[value="8"]').exists()).toBe(true)
+    expect(select.text()).toContain('2.1.281')
+    await select.setValue('8')
+    expect((wrapper.vm as any).tlsFingerprintProfileId).toBe(8)
   })
 
   it('leaves Codex PAT import billing ownership to the backend', async () => {

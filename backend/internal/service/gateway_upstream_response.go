@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/nativewire"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -366,6 +367,12 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 	scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	scheduleOpenCodeGoUsageActivity(s.deferredService, account)
 	body, readErr := s.readUpstreamErrorBody(resp)
+	if account != nil && account.IsNativeWireEnabled() && readErr == nil {
+		// The stock error-inspection limit is not a response-body limit.
+		var remainder []byte
+		remainder, readErr = io.ReadAll(resp.Body)
+		body = append(body, remainder...)
+	}
 	if readErr != nil {
 		// 读取失败时 body 可能被截断，错误分类会基于不完整数据；记录日志以便排查，
 		// 避免静默吞掉导致误判。
@@ -441,6 +448,12 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 			account.Type,
 			truncateForLog(body, s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes),
 		)
+	}
+	if account != nil && account.IsNativeWireEnabled() {
+		nativewire.CopyResponseHeaders(c.Writer.Header(), resp.Header)
+		c.Writer.WriteHeader(resp.StatusCode)
+		_, _ = c.Writer.Write(body)
+		return nil, fmt.Errorf("upstream error: %d", resp.StatusCode)
 	}
 
 	// 非 failover 错误也支持错误透传规则匹配。
@@ -707,6 +720,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	}
 	// 更新5h窗口状态
 	s.rateLimitService.UpdateSessionWindow(ctx, account, resp.Header)
+	if account != nil && account.IsNativeWireEnabled() {
+		return s.handleNativeClaudeStream(resp, c, startTime)
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -717,8 +733,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
-
-	// 透传其他响应头
 	if v := resp.Header.Get("x-request-id"); v != "" {
 		c.Header("x-request-id", v)
 	}
@@ -1396,6 +1410,34 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 	if err != nil {
 		return nil, err
 	}
+	if account != nil && account.IsNativeWireEnabled() {
+		observed, decodeErr := nativewire.DecodeResponseForObservation(body, resp.Header)
+		if decodeErr != nil {
+			logger.LegacyPrintf("service.gateway", "Native response observation decode failed: %v", decodeErr)
+		}
+		usage := &ClaudeUsage{}
+		if len(observed) > 0 {
+			var parsed struct {
+				Usage ClaudeUsage `json:"usage"`
+			}
+			if json.Unmarshal(observed, &parsed) == nil {
+				*usage = parsed.Usage
+				usage.CacheCreation5mTokens = int(gjson.GetBytes(observed, "usage.cache_creation.ephemeral_5m_input_tokens").Int())
+				usage.CacheCreation1hTokens = int(gjson.GetBytes(observed, "usage.cache_creation.ephemeral_1h_input_tokens").Int())
+			}
+			observer := upstreamResponseModelObserverFromContext(c)
+			if observer == nil {
+				observer = beginUpstreamResponseModelObservation(c)
+			}
+			observer.ObserveAnthropic(observed)
+		}
+		nativewire.CopyResponseHeaders(c.Writer.Header(), resp.Header)
+		c.Writer.WriteHeader(resp.StatusCode)
+		if _, err := c.Writer.Write(body); err != nil {
+			return nil, err
+		}
+		return usage, nil
+	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -1420,7 +1462,6 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 		response.Usage.CacheCreation5mTokens = int(cc5m.Int())
 		response.Usage.CacheCreation1hTokens = int(cc1h.Int())
 	}
-
 	// 兼容 Kimi cached_tokens → cache_read_input_tokens
 	if response.Usage.CacheReadInputTokens == 0 {
 		cachedTokens := gjson.GetBytes(body, "usage.cached_tokens").Int()
@@ -1451,7 +1492,11 @@ func (s *GatewayService) handleNonStreamingResponse(ctx context.Context, resp *h
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
 
-	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	if account != nil && account.IsNativeWireEnabled() {
+		nativewire.CopyResponseHeaders(c.Writer.Header(), resp.Header)
+	} else {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
 
 	contentType := "application/json"
 	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {

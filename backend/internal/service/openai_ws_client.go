@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/nativewire"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -66,6 +68,15 @@ type openAIWSForceCloser interface {
 // openAIWSClientDialer 抽象 WS 建连器。
 type openAIWSClientDialer interface {
 	Dial(ctx context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error)
+}
+
+type nativeWSProfileContextKey struct{}
+
+func withNativeWSProfile(ctx context.Context, profile *tlsfingerprint.Profile) context.Context {
+	if profile == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, nativeWSProfileContextKey{}, profile)
 }
 
 type openAIWSTransportMetricsDialer interface {
@@ -132,7 +143,15 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			return true
 		},
 	}
-	if proxy := strings.TrimSpace(proxyURL); proxy != "" {
+	if profile, ok := ctx.Value(nativeWSProfileContextKey{}).(*tlsfingerprint.Profile); ok && profile != nil {
+		transport, err := nativeWSHTTPTransport(profile, proxyURL)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		ordered := nativewire.NewHTTP1Transport(transport)
+		defer ordered.CloseIdleConnections()
+		opts.HTTPClient = &http.Client{Transport: ordered}
+	} else if proxy := strings.TrimSpace(proxyURL); proxy != "" {
 		proxyClient, err := d.proxyHTTPClient(proxy)
 		if err != nil {
 			return nil, 0, nil, err
@@ -164,6 +183,27 @@ func (d *coderOpenAIWSClientDialer) Dial(
 	}
 	wrapped.conn = conn
 	return wrapped, 0, respHeaders, nil
+}
+
+func nativeWSHTTPTransport(profile *tlsfingerprint.Profile, proxyURL string) (*http.Transport, error) {
+	transport := &http.Transport{TLSHandshakeTimeout: 10 * time.Second}
+	if strings.TrimSpace(proxyURL) == "" {
+		transport.DialTLSContext = tlsfingerprint.NewDialer(profile, nil).DialTLSContext
+		return transport, nil
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid native WS proxy: %w", err)
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http":
+		transport.DialTLSContext = tlsfingerprint.NewHTTPProxyDialer(profile, parsed).DialTLSContext
+	case "socks5", "socks5h":
+		transport.DialTLSContext = tlsfingerprint.NewSOCKS5ProxyDialer(profile, parsed).DialTLSContext
+	default:
+		return nil, fmt.Errorf("unsupported native WS proxy scheme: %s", parsed.Scheme)
+	}
+	return transport, nil
 }
 
 func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client, error) {

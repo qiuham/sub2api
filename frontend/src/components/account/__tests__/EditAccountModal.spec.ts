@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, listTLSProfilesMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
+  listTLSProfilesMock: vi.fn(),
   authIsSimpleMode: { value: true }
 }))
 
@@ -35,7 +36,7 @@ vi.mock('@/api/admin', () => ({
       getSettings: vi.fn().mockResolvedValue({})
     },
     tlsFingerprintProfiles: {
-      list: vi.fn().mockResolvedValue([])
+      list: listTLSProfilesMock
     }
   }
 }))
@@ -326,6 +327,7 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    listTLSProfilesMock.mockReset().mockResolvedValue([{ id: 7, name: 'codex-verified', native_family: 'codex', native_versions: ['0.156.1'] }])
   })
 
   afterEach(() => vi.useRealTimers())
@@ -837,6 +839,91 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_flatten_namespaces).toBe(
       true
     )
+  })
+
+  it('persists Native mode after OpenAI account extra is rebuilt', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="edit-native-tls-profile-select"]').setValue('7')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.native_wire_mode).toBe('native')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.enable_tls_fingerprint).toBe(true)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.tls_fingerprint_profile_id).toBe(7)
+  })
+
+  it('reopens saved Native and then saved Sub2API mode with the correct switch and template', async () => {
+    let saved = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockReset().mockImplementation(async (_id, payload) => {
+      saved = { ...saved, extra: payload.extra,
+        enable_tls_fingerprint: payload.extra?.enable_tls_fingerprint === true,
+        tls_fingerprint_profile_id: payload.extra?.tls_fingerprint_profile_id ?? null }
+      return saved
+    })
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const first = mountModal(saved)
+    await flushPromises()
+    await first.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    await first.get('[data-testid="edit-native-tls-profile-select"]').setValue('7')
+    await first.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(saved.extra.native_wire_mode).toBe('native')
+    expect(saved.tls_fingerprint_profile_id).toBe(7)
+    first.unmount()
+
+    const reopened = mountModal(saved)
+    await flushPromises()
+    expect(reopened.get('[data-testid="edit-native-wire-toggle"]').attributes('aria-checked')).toBe('true')
+    expect((reopened.get('[data-testid="edit-native-tls-profile-select"]').element as HTMLSelectElement).value).toBe('7')
+    await reopened.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    await reopened.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(saved.extra.native_wire_mode).toBeUndefined()
+    reopened.unmount()
+
+    const stock = mountModal(saved)
+    await flushPromises()
+    expect(stock.get('[data-testid="edit-native-wire-toggle"]').attributes('aria-checked')).toBe('false')
+  })
+
+  it('offers and saves the Claude template for an Anthropic OAuth account', async () => {
+    listTLSProfilesMock.mockResolvedValue([{ id: 8, name: 'claude-verified', native_family: 'claude', native_versions: ['2.1.281'] }])
+    const account = { ...buildOpenAIOAuthParentAccount(), platform: 'anthropic', name: 'Claude OAuth' } as any
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    expect(wrapper.get('[data-testid="edit-native-tls-profile-select"]').find('option[value="8"]').exists()).toBe(true)
+    await wrapper.get('[data-testid="edit-native-tls-profile-select"]').setValue('8')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).toMatchObject({
+      native_wire_mode: 'native', enable_tls_fingerprint: true, tls_fingerprint_profile_id: 8
+    })
+  })
+
+  it('keeps unrelated OAuth extra fields when Native mode is selected', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    account.extra = { ...account.extra, existing_setting: 'keep-me' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    await wrapper.get('[data-testid="edit-native-tls-profile-select"]').setValue('7')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.existing_setting).toBe('keep-me')
+  })
+
+  it('does not save Native mode without a bound TLS template', async () => {
+    const account = buildOpenAIOAuthParentAccount()
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await wrapper.get('[data-testid="edit-native-wire-toggle"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    expect(updateAccountMock).not.toHaveBeenCalled()
   })
 
   it('writes the upstream request id header into extra only when it changes', async () => {

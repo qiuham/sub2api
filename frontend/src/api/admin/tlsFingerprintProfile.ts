@@ -22,6 +22,8 @@ export interface TLSFingerprintProfile {
   key_share_groups: number[]
   psk_modes: number[]
   extensions: number[]
+  native_family?: 'claude' | 'codex'
+  native_versions?: string[]
   created_at: string
   updated_at: string
 }
@@ -77,6 +79,11 @@ export async function create(profileData: CreateProfileRequest): Promise<TLSFing
   return data
 }
 
+export async function createNative(family: 'claude' | 'codex'): Promise<TLSFingerprintProfile> {
+  const { data } = await apiClient.post<TLSFingerprintProfile>(`/admin/tls-fingerprint-profiles/native/${family}`)
+  return data
+}
+
 export async function update(id: number, updates: UpdateProfileRequest): Promise<TLSFingerprintProfile> {
   const { data } = await apiClient.put<TLSFingerprintProfile>(`/admin/tls-fingerprint-profiles/${id}`, updates)
   return data
@@ -91,6 +98,7 @@ export const tlsFingerprintProfileAPI = {
   list,
   getById,
   create,
+  createNative,
   update,
   delete: deleteProfile
 }

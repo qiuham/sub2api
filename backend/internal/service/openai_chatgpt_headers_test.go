@@ -62,3 +62,21 @@ func TestResolveAndSetOpenAIChatGPTAccountHeaders(t *testing.T) {
 			"普通账号应透传自身的 chatgpt-account-id")
 	})
 }
+
+func TestChatGPTAccountHeadersRejectStaleIdentity(t *testing.T) {
+	for _, tc := range []struct{ name, selected, want string }{
+		{"replace_client_identity", "selected-account", "selected-account"},
+		{"clear_when_selected_identity_missing", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+				Credentials: map[string]any{"chatgpt_account_id": tc.selected}}
+			h := make(http.Header)
+			h.Set("chatgpt-account-id", "untrusted-client-account")
+			h.Set("x-openai-fedramp", "true")
+			setOpenAIChatGPTAccountHeaders(h, account)
+			require.Equal(t, tc.want, h.Get("chatgpt-account-id"))
+			require.Empty(t, h.Get("x-openai-fedramp"))
+		})
+	}
+}

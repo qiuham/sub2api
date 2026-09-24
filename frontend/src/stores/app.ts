@@ -43,6 +43,9 @@ export const useAppStore = defineStore('app', () => {
   const hasUpdate = ref<boolean>(false)
   const buildType = ref<string>('source')
   const releaseInfo = ref<ReleaseInfo | null>(null)
+  const upstreamLatestVersion = ref<string>('')
+  const hasUpstreamUpdate = ref<boolean>(false)
+  const upstreamReleaseInfo = ref<ReleaseInfo | null>(null)
 
   // Auto-incrementing ID for toasts
   let toastIdCounter = 0
@@ -249,6 +252,9 @@ export const useAppStore = defineStore('app', () => {
         has_update: hasUpdate.value,
         build_type: buildType.value,
         release_info: releaseInfo.value || undefined,
+        upstream_latest_version: upstreamLatestVersion.value || undefined,
+        has_upstream_update: hasUpstreamUpdate.value,
+        upstream_release_info: upstreamReleaseInfo.value || undefined,
         cached: true
       }
     }
@@ -266,6 +272,9 @@ export const useAppStore = defineStore('app', () => {
       hasUpdate.value = data.has_update
       buildType.value = data.build_type || 'source'
       releaseInfo.value = data.release_info || null
+      upstreamLatestVersion.value = data.upstream_latest_version || ''
+      hasUpstreamUpdate.value = data.has_upstream_update || false
+      upstreamReleaseInfo.value = data.upstream_release_info || null
       versionLoaded.value = true
       return data
     } catch (error) {
@@ -282,6 +291,7 @@ export const useAppStore = defineStore('app', () => {
   function clearVersionCache(): void {
     versionLoaded.value = false
     hasUpdate.value = false
+    hasUpstreamUpdate.value = false
   }
 
   // ==================== Public Settings Management ====================
@@ -462,6 +472,9 @@ export const useAppStore = defineStore('app', () => {
     hasUpdate,
     buildType,
     releaseInfo,
+    upstreamLatestVersion,
+    hasUpstreamUpdate,
+    upstreamReleaseInfo,
 
     // Computed
     hasActiveToasts,

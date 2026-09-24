@@ -529,6 +529,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err := validateNativeAccountProfile(account, s.tlsProfileService); err != nil {
+		return nil, err
+	}
 	if err := s.ValidateAccountGroupBindings(ctx, groupIDs); err != nil {
 		return nil, err
 	}
@@ -856,6 +859,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 
 	billingSettingsAppliedAtomically := false
+	if err := validateNativeAccountProfile(account, s.tlsProfileService); err != nil {
+		return nil, err
+	}
 	updater := s.accountBillingRepo
 	if updater == nil {
 		// Unit tests and narrow internal callers may construct adminServiceImpl
@@ -994,7 +1000,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil {
+	_, changesNativeMode := input.Extra["native_wire_mode"]
+	_, changesNativeTLS := input.Extra["enable_tls_fingerprint"]
+	_, changesNativeProfile := input.Extra["tls_fingerprint_profile_id"]
+	needsNativeValidation := changesNativeMode || changesNativeTLS || changesNativeProfile
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || needsNativeValidation {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1005,6 +1015,25 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
+		}
+	}
+	if needsNativeValidation {
+		for _, accountID := range input.AccountIDs {
+			account := targetsByID[accountID]
+			if account == nil {
+				return nil, ErrAccountNotFound
+			}
+			candidate := *account
+			candidate.Extra = make(map[string]any, len(account.Extra)+len(input.Extra))
+			for key, value := range account.Extra {
+				candidate.Extra[key] = value
+			}
+			for key, value := range input.Extra {
+				candidate.Extra[key] = value
+			}
+			if err := validateNativeAccountProfile(&candidate, s.tlsProfileService); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if openAISettings.any() {

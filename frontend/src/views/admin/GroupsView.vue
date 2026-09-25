@@ -1637,7 +1637,7 @@
 
           <div
             v-if="
-              createForm.platform === 'openai' &&
+              ['openai', 'anthropic'].includes(createForm.platform) &&
               createForm.allow_messages_dispatch
             "
             class="mt-3"
@@ -3287,7 +3287,7 @@
 
           <div
             v-if="
-              editForm.platform === 'openai' && editForm.allow_messages_dispatch
+              ['openai', 'anthropic'].includes(editForm.platform) && editForm.allow_messages_dispatch
             "
             class="mt-3"
           >

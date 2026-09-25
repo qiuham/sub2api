@@ -14,7 +14,7 @@ export interface MessagesDispatchFormState {
 }
 
 export function supportsMessagesDispatchPlatform(platform: string): boolean {
-  return platform === "openai" || platform === "composite";
+  return platform === "openai" || platform === "anthropic" || platform === "composite";
 }
 
 export function createDefaultMessagesDispatchFormState(): MessagesDispatchFormState {

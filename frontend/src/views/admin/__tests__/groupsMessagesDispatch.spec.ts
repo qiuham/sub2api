@@ -12,7 +12,7 @@ describe("groupsMessagesDispatch", () => {
   it("supports OpenAI and composite groups", () => {
     expect(supportsMessagesDispatchPlatform("openai")).toBe(true);
     expect(supportsMessagesDispatchPlatform("composite")).toBe(true);
-    expect(supportsMessagesDispatchPlatform("anthropic")).toBe(false);
+    expect(supportsMessagesDispatchPlatform("anthropic")).toBe(true);
   });
 
   it("returns the expected default form state", () => {

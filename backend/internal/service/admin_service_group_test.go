@@ -1446,7 +1446,7 @@ func TestAdminService_UpdateGroup_PreservesMessagesDispatchFieldsWhenPlatformCha
 	require.Equal(t, PlatformAnthropic, repo.updated.Platform)
 	require.True(t, repo.updated.AllowMessagesDispatch)
 	require.False(t, repo.updated.AllowLive)
-	require.Equal(t, "gpt-5.3-codex", repo.updated.DefaultMappedModel)
+	require.Equal(t, "gpt-5.4", repo.updated.DefaultMappedModel)
 	require.Equal(t, OpenAIMessagesDispatchModelConfig{SonnetMappedModel: "gpt-5.3-codex"}, repo.updated.MessagesDispatchModelConfig)
 }
 

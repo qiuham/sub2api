@@ -296,7 +296,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if !s.isGatewayAccountProfitEligible(ctx, account) {
 				continue
 			}
-			if !s.isAccountAllowedForPlatform(account, platform, useMixed) {
+			if !s.isAccountAllowedForPlatformWithContext(ctx, account, platform, useMixed) {
 				filteredPlatform++
 				continue
 			}
@@ -356,7 +356,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
 							s.isGatewayAccountProfitEligible(ctx, stickyAccount) &&
-							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
+							s.isAccountAllowedForPlatformWithContext(ctx, stickyAccount, platform, useMixed) &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
 							!isChannelRestricted(stickyAccount) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
@@ -540,7 +540,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				// 注意：不再检查 isAccountInGroup，因为 accountByID 已经从按分组过滤的
 				// accounts 列表构建，账号一定在分组内。而 scheduler snapshot 缓存
 				// 反序列化后 AccountGroups 字段为空，导致 isAccountInGroup 永远返回 false。
-				platformOK := s.isAccountAllowedForPlatform(account, platform, useMixed)
+				platformOK := s.isAccountAllowedForPlatformWithContext(ctx, account, platform, useMixed)
 				profitOK := s.isGatewayAccountProfitEligible(ctx, account)
 				modelSupported := requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)
 				channelOK := !isChannelRestricted(account)
@@ -665,7 +665,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		if !s.isGatewayAccountProfitEligible(ctx, acc) {
 			continue
 		}
-		if !s.isAccountAllowedForPlatform(acc, platform, useMixed) {
+		if !s.isAccountAllowedForPlatformWithContext(ctx, acc, platform, useMixed) {
 			continue
 		}
 		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -1012,7 +1012,11 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 }
 
 func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
-	if s.schedulerSnapshot != nil {
+	allowOpenAIForAnthropic := s.allowOpenAIForAnthropicMessages(ctx, groupID, platform)
+	// The snapshot index is keyed by one concrete platform. A Claude Messages
+	// group with OpenAI OAuth accounts needs the live multi-platform query so the
+	// same account can be selected without duplicating its credentials.
+	if s.schedulerSnapshot != nil && !allowOpenAIForAnthropic {
 		accounts, useMixed, err := s.schedulerSnapshot.ListSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
 		if err == nil {
 			accounts = s.filterAccountsBySchedulingThreshold(ctx, accounts)
@@ -1041,6 +1045,9 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	if useMixed {
 		platforms := []string{platform, PlatformAntigravity}
+		if allowOpenAIForAnthropic {
+			platforms = append(platforms, PlatformOpenAI)
+		}
 		var accounts []Account
 		var err error
 		if groupID != nil {
@@ -1144,6 +1151,34 @@ func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform 
 		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
 	}
 	return account.Platform == platform
+}
+
+func (s *GatewayService) isAccountAllowedForPlatformWithContext(ctx context.Context, account *Account, platform string, useMixed bool) bool {
+	if s.isAccountAllowedForPlatform(account, platform, useMixed) {
+		return true
+	}
+	return useMixed && platform == PlatformAnthropic && account != nil &&
+		account.Platform == PlatformOpenAI && s.allowOpenAIForAnthropicMessages(ctx, currentGroupIDFromContext(ctx), platform)
+}
+
+func currentGroupIDFromContext(ctx context.Context) *int64 {
+	group, _ := ctx.Value(ctxkey.Group).(*Group)
+	if group == nil || group.ID <= 0 {
+		return nil
+	}
+	id := group.ID
+	return &id
+}
+
+func (s *GatewayService) allowOpenAIForAnthropicMessages(ctx context.Context, groupID *int64, platform string) bool {
+	if platform != PlatformAnthropic || groupID == nil {
+		return false
+	}
+	group := s.groupFromContext(ctx, *groupID)
+	if group == nil && s.groupRepo != nil {
+		group, _ = s.groupRepo.GetByIDLite(ctx, *groupID)
+	}
+	return group != nil && group.Platform == PlatformAnthropic && group.AllowMessagesDispatch
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
@@ -2192,7 +2227,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+							if s.isAccountAllowedForPlatformWithContext(ctx, account, nativePlatform, true) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -2316,7 +2351,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 					}
 					if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
-						if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+						if s.isAccountAllowedForPlatformWithContext(ctx, account, nativePlatform, true) {
 							return account, nil
 						}
 					}

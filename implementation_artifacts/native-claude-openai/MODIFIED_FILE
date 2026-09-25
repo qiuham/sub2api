@@ -1,0 +1,2 @@
+TARGET: Anthropic group account selection for OpenAI OAuth
+CHANGED: Anthropic groups retain Messages Dispatch configuration; enabled groups select OpenAI accounts through the existing Anthropic-to-OpenAI bridge; scheduler snapshots are bypassed for this mixed-platform route.

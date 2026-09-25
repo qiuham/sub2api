@@ -52,6 +52,12 @@ func RegisterGatewayRoutes(
 			service.PlatformMiniMax, service.PlatformOpenCodeGo:
 			// 国产 OpenAI 兼容供应商与 openai/grok 一样经 OpenAI 网关转发。
 			return true
+		case service.PlatformAnthropic:
+			// An Anthropic group with Messages Dispatch enabled may use an
+			// OpenAI OAuth account as its upstream while retaining the Anthropic
+			// client-facing protocol.
+			apiKey, ok := middleware.GetAPIKeyFromContext(c)
+			return ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.AllowMessagesDispatch
 		default:
 			return false
 		}
@@ -60,6 +66,13 @@ func RegisterGatewayRoutes(
 		switch getGroupPlatform(c) {
 		case service.PlatformOpenAI, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek, service.PlatformMiniMax, service.PlatformOpenCodeGo:
 			h.OpenAIGateway.CountTokens(c)
+		case service.PlatformAnthropic:
+			apiKey, ok := middleware.GetAPIKeyFromContext(c)
+			if ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.AllowMessagesDispatch {
+				h.OpenAIGateway.CountTokens(c)
+			} else {
+				h.Gateway.CountTokens(c)
+			}
 		case service.PlatformGrok:
 			h.OpenAIGateway.GrokCountTokens(c)
 		default:

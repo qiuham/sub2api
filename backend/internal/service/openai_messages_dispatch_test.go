@@ -48,11 +48,11 @@ func TestGroupResolveMessagesDispatchModel_GrokRequiresCrossClientMapping(t *tes
 	require.Empty(t, group.ResolveMessagesDispatchModel("gpt-5.3-codex"))
 }
 
-func TestSanitizeGroupMessagesDispatchFields_ClearsNonOpenAIPlatform(t *testing.T) {
+func TestSanitizeGroupMessagesDispatchFields_ClearsUnsupportedPlatform(t *testing.T) {
 	t.Parallel()
 
 	group := &Group{
-		Platform:              PlatformAnthropic,
+		Platform:              PlatformGrok,
 		AllowMessagesDispatch: true,
 		DefaultMappedModel:    "gpt-5.6-sol",
 		MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
@@ -68,6 +68,23 @@ func TestSanitizeGroupMessagesDispatchFields_ClearsNonOpenAIPlatform(t *testing.
 	require.False(t, group.AllowMessagesDispatch)
 	require.Empty(t, group.DefaultMappedModel)
 	require.Equal(t, OpenAIMessagesDispatchModelConfig{}, group.MessagesDispatchModelConfig)
+}
+
+func TestSanitizeGroupMessagesDispatchFields_PreservesAnthropicBridge(t *testing.T) {
+	t.Parallel()
+
+	group := &Group{
+		Platform:              PlatformAnthropic,
+		AllowMessagesDispatch: true,
+		MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+			SonnetMappedModel: "gpt-6-astra",
+		},
+	}
+
+	sanitizeGroupMessagesDispatchFields(group)
+
+	require.True(t, group.AllowMessagesDispatch)
+	require.Equal(t, "gpt-6-astra", group.MessagesDispatchModelConfig.SonnetMappedModel)
 }
 
 func TestSanitizeGroupMessagesDispatchFields_PreservesCompositeDispatchToggle(t *testing.T) {

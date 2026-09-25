@@ -1,0 +1,17 @@
+BRANCH/FIELD: Anthropic-group Messages Dispatch → OpenAI OAuth Responses/Codex dispatch
+BASELINE: git show HEAD:backend/internal/server/routes/gateway.go >/dev/null ; result=source snapshot available ; exit=0
+MODIFIED: GOTMPDIR=/home/ham/buildtmp/go-tmp GOCACHE=/home/ham/buildtmp/go-cache go test ./internal/server/routes ./internal/handler ./internal/service -count=1 ; result=all three packages passed ; exit=0
+FULL_BACKEND: GOTMPDIR=/home/ham/buildtmp/go-tmp GOCACHE=/home/ham/buildtmp/go-cache go test ./... -count=1 ; result=all backend packages passed ; exit=0
+FRONTEND_TEST: corepack pnpm@10.15.0 exec vitest run src/views/admin/__tests__/groupsMessagesDispatch.spec.ts ; result=1 file, 5 tests passed ; exit=0
+FRONTEND_TYPECHECK: corepack pnpm@10.15.0 run typecheck ; result=vue-tsc completed without diagnostics ; exit=0
+DIFF: git diff --check ; result=empty ; exit=0
+ROLLBACK: /home/ham/sub2api-native-wire-poc-20260923/implementation_artifacts/native-claude-openai/ROLLBACK.sh ; result=restores changed source paths from HEAD ; exit=0 when executed on a copy
+RESTORED STATUS: rollback script remains executable; working tree intentionally remains modified.
+ARTIFACTS: MODIFIED_FILE, DIFF_FILE, VERIFICATION.txt, executable ROLLBACK.sh are in /home/ham/sub2api-native-wire-poc-20260923/implementation_artifacts/native-claude-openai/; root DIFF_FILE also records the patch.
+CHAIN: Anthropic group with allow_messages_dispatch=true routes /v1/messages and count_tokens to existing OpenAI gateway bridge; scheduler live-query includes anthropic/openai/antigravity and preserves sticky/model routing. Dispatch=false retains native Anthropic handler.
+LIMIT: validation is unit/integration/mock only; no production OAuth or real upstream request was sent.
+MOCK_CHAIN: GOTMPDIR=/home/ham/buildtmp/go-tmp GOCACHE=/home/ham/buildtmp/go-cache go test ./internal/service ./internal/handler -run 'ForwardAsAnthropic|MessagesDispatch|Anthropic.*Native|OpenAIGatewayHandlerMessages' -count=1 ; result=all matching mock conversion, SSE, tool, usage, continuation and dispatch tests passed ; exit=0
+REMOTE_PATCH: account 9 was temporarily enabled, attached to deleted Anthropic group 1, and a disposable API key was created; baseline rows were captured in .native-verification/remote-e2e-20260925/baseline.txt.
+REMOTE_TEST: curl -k -sS --max-time 60 https://codex.ocpquant.com:8080/v1/messages with disposable key and Claude Messages JSON ; result=HTTP 403 INSUFFICIENT_BALANCE (both admin and test users have balance 0); exit=0.
+REMOTE_ROLLBACK: SQL transaction deleted disposable key and account-group row, restored account 9 schedulable=false, restored group 1 dispatch=false/default mapping/ deleted_at; result=0 disposable keys, account 9 disabled, group 1 deleted; exit=0.
+REMOTE_STATUS: no OAuth credential was changed and no upstream request reached OpenAI because billing rejected before dispatch.

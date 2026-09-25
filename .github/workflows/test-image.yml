@@ -29,9 +29,16 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
+          push: false
+          load: false
+          outputs: type=oci,dest=/tmp/sub2api-test.tar
           platforms: linux/amd64
           tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:test-${{ github.sha }}
           build-args: |
             VERSION=test-${{ github.sha }}
             COMMIT=${{ github.sha }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sub2api-test-image
+          path: /tmp/sub2api-test.tar
+          retention-days: 3

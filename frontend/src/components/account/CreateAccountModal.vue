@@ -3574,6 +3574,7 @@
           v-model="form.group_ids"
           :groups="groups"
           :platform="form.platform"
+          :allow-open-ai-for-anthropic="form.platform === 'openai' && form.type === 'oauth'"
           :mixed-scheduling="mixedScheduling"
           data-tour="account-form-groups"
         />

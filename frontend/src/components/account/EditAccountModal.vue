@@ -3099,6 +3099,7 @@
         v-model="form.group_ids"
         :groups="selectableGroups"
         :platform="account?.platform"
+        :allow-open-ai-for-anthropic="account?.platform === 'openai' && account?.type === 'oauth'"
         :mixed-scheduling="mixedScheduling"
         data-tour="account-form-groups"
       />

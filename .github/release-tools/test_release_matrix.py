@@ -80,11 +80,8 @@ class ReleaseMatrixTest(unittest.TestCase):
                 self.assertFalse(data['dockers'])
                 self.assertEqual(data['release']['header'], original['release']['header'])
                 self.assertEqual(data['release']['footer'], original['release']['footer'])
-                if simple:
-                    self.assertTrue(data['checksum']['disable'])
-                    self.assertTrue(data['release']['skip_upload'])
-                else:
-                    self.assertEqual(data['checksum']['extra_files'], data['release']['extra_files'])
+                self.assertFalse(data['release'].get('skip_upload', False))
+                self.assertEqual(data['checksum']['extra_files'], data['release']['extra_files'])
 
     def test_collect_and_verify_hash_and_source_binding(self):
         args = self.fixture_artifacts()

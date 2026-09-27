@@ -72,7 +72,7 @@ interface Props {
   groups: (Group & { account_count?: number })[]
   platform?: GroupPlatform // Optional platform filter
   /** OpenAI OAuth accounts may be dispatched through Anthropic Messages groups. */
-  allowOpenAIForAnthropic?: boolean
+  allowOpenAiForAnthropic?: boolean
   mixedScheduling?: boolean // For antigravity accounts: allow anthropic/gemini groups
   searchable?: boolean | 'auto'
 }
@@ -97,7 +97,7 @@ const filteredGroups = computed(() => {
     ? props.groups.filter((g) => g.platform !== 'composite')
     : props.groups
   if (props.platform) {
-    if (props.platform === 'openai' && props.allowOpenAIForAnthropic) {
+    if (props.platform === 'openai' && props.allowOpenAiForAnthropic) {
       // This is the explicit OpenAI OAuth → Anthropic Messages dispatch path.
       // Keep normal OpenAI/composite groups visible and add Anthropic groups;
       // other account platforms retain the strict same-platform filter below.

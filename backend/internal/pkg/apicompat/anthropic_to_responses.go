@@ -55,6 +55,12 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 
 	if len(req.Tools) > 0 {
 		out.Tools = convertAnthropicToolsToResponses(req.Tools)
+		for _, tool := range out.Tools {
+			if tool.Type == "web_search" {
+				out.Include = append(out.Include, "web_search_call.action.sources")
+				break
+			}
+		}
 	}
 
 	// Determine reasoning effort: only output_config.effort controls the
@@ -77,6 +83,23 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 			return nil, fmt.Errorf("convert tool_choice: %w", err)
 		}
 		out.ToolChoice = tc
+		var choice struct {
+			Type            string `json:"type"`
+			Name            string `json:"name"`
+			DisableParallel bool   `json:"disable_parallel_tool_use"`
+		}
+		if err := json.Unmarshal(req.ToolChoice, &choice); err != nil {
+			return nil, err
+		}
+		parallelToolCalls = !choice.DisableParallel
+		if choice.Type == "tool" {
+			for _, tool := range req.Tools {
+				if tool.Name == choice.Name && strings.HasPrefix(tool.Type, "web_search") {
+					out.ToolChoice = json.RawMessage(`{"type":"web_search"}`)
+					break
+				}
+			}
+		}
 	}
 
 	return out, nil
@@ -220,6 +243,10 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 			continue
 		}
 		outputText, imageParts := convertToolResultOutput(b)
+		if b.IsError {
+			encoded, _ := json.Marshal(map[string]any{"is_error": true, "content": outputText})
+			outputText = string(encoded)
+		}
 		out = append(out, ResponsesInputItem{
 			Type:   "function_call_output",
 			CallID: toResponsesCallID(b.ToolUseID),
@@ -351,9 +378,12 @@ func fromResponsesCallID(id string) string {
 	return id
 }
 
-// anthropicImageToDataURI converts an AnthropicImageSource to a data URI string.
+// anthropicImageToDataURI preserves URL sources or converts base64 sources to data URIs.
 // Returns "" if the source is nil or has no data.
 func anthropicImageToDataURI(src *AnthropicImageSource) string {
+	if src != nil && src.Type == "url" {
+		return src.URL
+	}
 	if src == nil || src.Data == "" {
 		return ""
 	}
@@ -449,7 +479,11 @@ func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 	for _, t := range tools {
 		// Anthropic server tools like "web_search_20250305" → OpenAI {"type":"web_search"}
 		if strings.HasPrefix(t.Type, "web_search") {
-			out = append(out, ResponsesTool{Type: "web_search"})
+			tool := ResponsesTool{Type: "web_search", UserLocation: t.UserLocation}
+			if len(t.AllowedDomains) > 0 || len(t.BlockedDomains) > 0 {
+				tool.Filters = &WebSearchFilters{AllowedDomains: t.AllowedDomains, BlockedDomains: t.BlockedDomains}
+			}
+			out = append(out, tool)
 			continue
 		}
 		out = append(out, ResponsesTool{

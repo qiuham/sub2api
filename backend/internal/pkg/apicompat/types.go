@@ -106,7 +106,8 @@ func (b AnthropicContentBlock) MarshalJSON() ([]byte, error) {
 
 // AnthropicImageSource describes the source data for an image content block.
 type AnthropicImageSource struct {
-	Type      string `json:"type"` // "base64"
+	URL       string `json:"url,omitempty"`
+	Type      string `json:"type"` // "base64" | "url"
 	MediaType string `json:"media_type"`
 	Data      string `json:"data"`
 }
@@ -118,6 +119,11 @@ type AnthropicTool struct {
 	Description  string                 `json:"description,omitempty"`
 	InputSchema  json.RawMessage        `json:"input_schema,omitempty"` // JSON Schema object
 	CacheControl *AnthropicCacheControl `json:"cache_control,omitempty"`
+
+	// Hosted web search options.
+	AllowedDomains []string        `json:"allowed_domains,omitempty"`
+	BlockedDomains []string        `json:"blocked_domains,omitempty"`
+	UserLocation   json.RawMessage `json:"user_location,omitempty"`
 }
 
 // AnthropicCacheControl 对应 Anthropic API 的 cache_control 字段。
@@ -334,6 +340,10 @@ type ResponsesTool struct {
 	Tools    []ResponsesTool `json:"tools,omitempty"`
 	Children []ResponsesTool `json:"children,omitempty"`
 
+	// type=web_search
+	Filters      *WebSearchFilters `json:"filters,omitempty"`
+	UserLocation json.RawMessage   `json:"user_location,omitempty"`
+
 	// type=x_search
 	AllowedXHandles          []string `json:"allowed_x_handles,omitempty"`
 	ExcludedXHandles         []string `json:"excluded_x_handles,omitempty"`
@@ -492,10 +502,23 @@ func (o *ResponsesOutput) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// WebSearchAction describes the search action in a web_search_call output item.
+// WebSearchFilters limits the domains used by hosted web search.
+type WebSearchFilters struct {
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
+}
+
+type WebSearchSource struct {
+	Type  string `json:"type"`
+	URL   string `json:"url"`
+	Title string `json:"title,omitempty"`
+}
+
+// WebSearchAction describes an action in a web_search_call output item.
 type WebSearchAction struct {
-	Type  string `json:"type,omitempty"`  // "search"
-	Query string `json:"query,omitempty"` // primary search query
+	Sources []WebSearchSource `json:"sources,omitempty"`
+	Type    string            `json:"type,omitempty"`  // "search"
+	Query   string            `json:"query,omitempty"` // primary search query
 }
 
 // ResponsesSummary is a summary text block inside a reasoning output.
@@ -726,6 +749,10 @@ type ChatFile struct {
 type ChatTool struct {
 	Type     string        `json:"type"` // "function" | "web_search" | "code_execution" | "x_search"
 	Function *ChatFunction `json:"function,omitempty"`
+
+	// type=web_search
+	Filters      *WebSearchFilters `json:"filters,omitempty"`
+	UserLocation json.RawMessage   `json:"user_location,omitempty"`
 
 	// type=x_search
 	AllowedXHandles          []string `json:"allowed_x_handles,omitempty"`

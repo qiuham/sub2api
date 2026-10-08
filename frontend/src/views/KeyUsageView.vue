@@ -555,13 +555,30 @@ function getRingOffset(ring: RingItem): number {
   return CIRCUMFERENCE - (Math.min(ring.pct, 100) / 100) * CIRCUMFERENCE
 }
 
+let ringFrame: number | undefined
+let ringTimer: ReturnType<typeof setTimeout> | undefined
+let ringGeneration = 0
+
+function cancelRingAnimation() {
+  ringGeneration++
+  if (ringFrame !== undefined) cancelAnimationFrame(ringFrame)
+  if (ringTimer !== undefined) clearTimeout(ringTimer)
+  ringFrame = undefined
+  ringTimer = undefined
+}
+
 function triggerRingAnimation(items: RingItem[]) {
+  cancelRingAnimation()
+  const generation = ringGeneration
   ringAnimated.value = false
   displayPcts.value = items.map(() => 0)
 
   nextTick(() => {
-    requestAnimationFrame(() => {
-      setTimeout(() => {
+    if (generation !== ringGeneration) return
+    ringFrame = requestAnimationFrame(() => {
+      ringFrame = undefined
+      ringTimer = setTimeout(() => {
+        ringTimer = undefined
         ringAnimated.value = true
 
         // Animate percentage numbers
@@ -574,9 +591,10 @@ function triggerRingAnimation(items: RingItem[]) {
           const p = Math.min(elapsed / duration, 1)
           const ease = 1 - Math.pow(1 - p, 3)
           displayPcts.value = targets.map(target => Math.round(ease * target))
-          if (p < 1) requestAnimationFrame(tick)
+          if (p < 1) ringFrame = requestAnimationFrame(tick)
+          else ringFrame = undefined
         }
-        requestAnimationFrame(tick)
+        ringFrame = requestAnimationFrame(tick)
       }, 50)
     })
   })
@@ -939,6 +957,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelRingAnimation()
   if (resetTimer) clearInterval(resetTimer)
 })
 </script>

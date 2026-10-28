@@ -71,6 +71,16 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		billingModel,
 	)
 
+	// DeepSeek Anthropic 端点不接受 Claude Code 的 tool_definition 内容块。
+	// 只在 DeepSeek 路径把定义提升到 tools，并改成 tool_reference；其他账号原样透传。
+	if account.Platform == PlatformDeepseek {
+		if normalized, changed, err := normalizeDeepSeekInlineToolDefinitions(body); err != nil {
+			return nil, err
+		} else if changed {
+			body = normalized
+		}
+	}
+
 	// 与 Anthropic 平台 passthrough 相同的 pre-filter：剥离空文本块与上游
 	// 无法接受的 web-search 历史块（GLM/Kimi/DeepSeek 对 server_tool_use 400）。
 	body = StripEmptyTextBlocks(body)

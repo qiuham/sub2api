@@ -423,7 +423,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			if account.Platform == PlatformGrok {
 				upstreamReq, err = buildGrokResponsesRequest(upstreamCtxRetry, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
 			} else {
-				upstreamReq, err = s.buildUpstreamRequest(upstreamCtxRetry, c, account, responsesBody, token, isStream, promptCacheKey, false)
+				// Preserve the exact authentication and session headers from the first attempt.
+				upstreamReq = upstreamReq.Clone(upstreamCtxRetry)
+				upstreamReq.Body = io.NopCloser(bytes.NewReader(responsesBody))
+				upstreamReq.ContentLength = int64(len(responsesBody))
+				upstreamReq.GetBody = func() (io.ReadCloser, error) {
+					return io.NopCloser(bytes.NewReader(responsesBody)), nil
+				}
 			}
 			releaseRetry()
 			if err != nil {
@@ -444,8 +450,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// Prefer explicit decrypt errors; also strip once on any 400 when the
 		// outbound body still carries reasoning.encrypted_content (account
 		// switch often returns opaque "Upstream error: 400").
-		shouldStrip := isOpenAICompatInvalidEncryptedContentResponse(resp.StatusCode, respBody) &&
+		shouldStrip := account.Platform == PlatformOpenAI &&
+			isOpenAICompatInvalidEncryptedContentResponse(resp.StatusCode, respBody) &&
 			requestHasGrokEncryptedReasoning(responsesBody)
+		if account.Platform == PlatformGrok {
+			shouldStrip = resp.StatusCode == http.StatusBadRequest &&
+				(isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) || requestHasGrokEncryptedReasoning(responsesBody))
+		}
 		if !shouldStrip {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			break

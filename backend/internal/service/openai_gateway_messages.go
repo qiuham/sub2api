@@ -21,6 +21,14 @@ import (
 	"go.uber.org/zap"
 )
 
+func isOpenAICompatInvalidEncryptedContentResponse(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	msg := strings.ToLower(string(body))
+	return strings.Contains(msg, "invalid_encrypted_content") || (strings.Contains(msg, "encrypted content") && (strings.Contains(msg, "could not be verified") || strings.Contains(msg, "could not be decrypted") || strings.Contains(msg, "could not be parsed")))
+}
+
 // ForwardAsAnthropic accepts an Anthropic Messages request body, converts it
 // to OpenAI Responses API format, forwards to the OpenAI upstream, and converts
 // the response back to Anthropic Messages format. This enables Claude Code
@@ -459,13 +467,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	func isOpenAICompatInvalidEncryptedContentResponse(statusCode int, body []byte) bool {
-	if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity { return false }
-	msg := strings.ToLower(string(body))
-	return strings.Contains(msg, "invalid_encrypted_content") || (strings.Contains(msg, "encrypted content") && (strings.Contains(msg, "could not be verified") || strings.Contains(msg, "could not be decrypted") || strings.Contains(msg, "could not be parsed")))
-}
-
-// 8. Handle error response with failover
+	// 8. Handle error response with failover
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
 		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {

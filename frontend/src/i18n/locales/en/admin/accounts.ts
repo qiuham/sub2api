@@ -1716,7 +1716,6 @@ export default {
         geminiProDaily: 'Pro',
         geminiFlashDaily: 'Flash',
         gemini: 'Gemini',
-        sharedQuota: 'Shared',
         claude: 'Claude',
         grokRequests: 'Req',
         grokTokens: 'Tok',

@@ -860,48 +860,46 @@ const hasAntigravityQuotaFromAPI = computed(() => {
   return usageInfo.value?.antigravity_quota && Object.keys(usageInfo.value.antigravity_quota).length > 0
 })
 
-// Antigravity 每个模型带一份配额，实际是共享的池子：同一份配额（已用比例 + 重置
-// 时间相同）的模型合并成一行，标签按模型族给 Gemini / Claude。这样不列具体版本，
-// 上游给几个池就画几行。
+// Antigravity 的配额按模型族分开算：Gemini 一组、Claude 一组。每个模型都带一份
+// 配额信息，同族内取最高使用率和最早重置时间画一行。不写死模型版本，上游出
+// gemini-5-flash 或 claude-opus-6 都自动进对应的组。
 type UsageBarColor = 'indigo' | 'emerald' | 'purple' | 'amber' | 'sky' | 'rose'
-type QuotaPool = 'gemini' | 'claude' | 'shared'
 
-const QUOTA_POOL_STYLE: Record<QuotaPool, { labelKey: string; color: UsageBarColor }> = {
-  gemini: { labelKey: 'admin.accounts.usageWindow.gemini', color: 'indigo' },
-  claude: { labelKey: 'admin.accounts.usageWindow.claude', color: 'amber' },
-  shared: { labelKey: 'admin.accounts.usageWindow.sharedQuota', color: 'sky' }
-}
+const QUOTA_FAMILIES: { key: string; labelKey: string; color: UsageBarColor }[] = [
+  { key: 'gemini', labelKey: 'admin.accounts.usageWindow.gemini', color: 'indigo' },
+  { key: 'claude', labelKey: 'admin.accounts.usageWindow.claude', color: 'amber' }
+]
 
 const antigravityQuotaGroups = computed(() => {
   const quota = usageInfo.value?.antigravity_quota
   if (!quota) return []
-  const pools = new Map<string, { utilization: number; resetTime: string | null; families: Set<string> }>()
+  const families = new Map<string, { utilization: number; resetTime: string | null }>()
   for (const [model, info] of Object.entries(quota)) {
     const name = model.toLowerCase()
     const family = name.startsWith('claude') ? 'claude' : name.startsWith('gemini') ? 'gemini' : null
     // chat_*、tab_* 这类不是对话模型，面板不画。
     if (!family) continue
-    const key = `${info.utilization}|${info.reset_time ?? ''}`
-    const pool = pools.get(key) ?? { utilization: info.utilization, resetTime: info.reset_time ?? null, families: new Set<string>() }
-    pool.families.add(family)
-    pools.set(key, pool)
+    const current = families.get(family)
+    if (!current) {
+      families.set(family, { utilization: info.utilization, resetTime: info.reset_time ?? null })
+      continue
+    }
+    current.utilization = Math.max(current.utilization, info.utilization)
+    if (info.reset_time && (!current.resetTime || info.reset_time < current.resetTime)) {
+      current.resetTime = info.reset_time
+    }
   }
-  const order: QuotaPool[] = ['gemini', 'claude', 'shared']
-  return [...pools.values()]
-    .map((pool) => {
-      const kind: QuotaPool = pool.families.size === 1 ? ([...pool.families][0] as QuotaPool) : 'shared'
+  return QUOTA_FAMILIES
+    .filter((family) => families.has(family.key))
+    .map((family) => {
+      const value = families.get(family.key)!
       return {
-        key: `${kind}-${pool.utilization}-${pool.resetTime ?? ''}`,
-        labelKey: QUOTA_POOL_STYLE[kind].labelKey,
-        color: QUOTA_POOL_STYLE[kind].color,
-        utilization: pool.utilization,
-        resetTime: pool.resetTime
+        key: family.key,
+        labelKey: family.labelKey,
+        color: family.color,
+        utilization: value.utilization,
+        resetTime: value.resetTime
       }
-    })
-    .sort((a, b) => {
-      const rank = (labelKey: string) =>
-        order.findIndex((k) => QUOTA_POOL_STYLE[k].labelKey === labelKey)
-      return rank(a.labelKey) - rank(b.labelKey)
     })
 })
 

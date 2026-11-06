@@ -407,21 +407,13 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('-')
   })
 
-  it('Antigravity 图片用量会聚合新旧 image 模型', async () => {
+  it('Antigravity 同一配额的模型合并成一个池，Gemini 和 Claude 分开', async () => {
     getUsage.mockResolvedValue({
       antigravity_quota: {
-        'gemini-2.5-flash-image': {
-          utilization: 45,
-          reset_time: '2026-03-01T11:00:00Z'
-        },
-        'gemini-3.1-flash-image': {
-          utilization: 20,
-          reset_time: '2026-03-01T10:00:00Z'
-        },
-        'gemini-3-pro-image': {
-          utilization: 70,
-          reset_time: '2026-03-01T09:00:00Z'
-        }
+        'gemini-3-flash': { utilization: 45, reset_time: '2026-03-01T11:00:00Z' },
+        'gemini-3.1-flash-image': { utilization: 45, reset_time: '2026-03-01T11:00:00Z' },
+        'gemini-4-argon-high': { utilization: 45, reset_time: '2026-03-01T11:00:00Z' },
+        'claude-opus-5-5-high': { utilization: 10, reset_time: '2026-03-01T12:00:00Z' }
       }
     })
 
@@ -447,7 +439,12 @@ describe('AccountUsageCell', () => {
 
     await flushPromises()
 
-    expect(wrapper.text()).toContain('admin.accounts.usageWindow.gemini3Image|70|2026-03-01T09:00:00Z')
+    const text = wrapper.text()
+    // 三个 gemini 模型共用一份配额：只画一行 Gemini
+    expect(text.match(/admin\.accounts\.usageWindow\.gemini\|/g)?.length).toBe(1)
+    expect(text).toContain('admin.accounts.usageWindow.gemini|45|2026-03-01T11:00:00Z')
+    // Claude 池单独一行
+    expect(text).toContain('admin.accounts.usageWindow.claude|10|2026-03-01T12:00:00Z')
   })
 
   it('Antigravity 会显示 AI Credits 余额信息', async () => {

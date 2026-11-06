@@ -517,7 +517,6 @@ export default {
         geminiProDaily: 'Pro',
         geminiFlashDaily: 'Flash',
         gemini: 'Gemini',
-        sharedQuota: '共享',
         claude: 'Claude',
         grokRequests: '请求',
         grokTokens: 'Token',

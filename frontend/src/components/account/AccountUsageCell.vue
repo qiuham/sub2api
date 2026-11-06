@@ -296,40 +296,14 @@
 
       <!-- Usage data from API -->
       <div v-else-if="hasAntigravityQuotaFromAPI" class="space-y-1">
-        <!-- Gemini 3 Pro -->
+        <!-- 按模型分类聚合；分类靠名字前缀，不列具体版本，新模型自动进组 -->
         <UsageProgressBar
-          v-if="antigravity3ProUsageFromAPI !== null"
-          :label="t('admin.accounts.usageWindow.gemini3Pro')"
-          :utilization="antigravity3ProUsageFromAPI.utilization"
-          :resets-at="antigravity3ProUsageFromAPI.resetTime"
-          color="indigo"
-        />
-
-        <!-- Gemini 3 Flash -->
-        <UsageProgressBar
-          v-if="antigravity3FlashUsageFromAPI !== null"
-          :label="t('admin.accounts.usageWindow.gemini3Flash')"
-          :utilization="antigravity3FlashUsageFromAPI.utilization"
-          :resets-at="antigravity3FlashUsageFromAPI.resetTime"
-          color="emerald"
-        />
-
-        <!-- Gemini 3 Image -->
-        <UsageProgressBar
-          v-if="antigravity3ImageUsageFromAPI !== null"
-          :label="t('admin.accounts.usageWindow.gemini3Image')"
-          :utilization="antigravity3ImageUsageFromAPI.utilization"
-          :resets-at="antigravity3ImageUsageFromAPI.resetTime"
-          color="purple"
-        />
-
-        <!-- Claude -->
-        <UsageProgressBar
-          v-if="antigravityClaudeUsageFromAPI !== null"
-          :label="t('admin.accounts.usageWindow.claude')"
-          :utilization="antigravityClaudeUsageFromAPI.utilization"
-          :resets-at="antigravityClaudeUsageFromAPI.resetTime"
-          color="amber"
+          v-for="group in antigravityQuotaGroups"
+          :key="group.key"
+          :label="t(group.labelKey)"
+          :utilization="group.utilization"
+          :resets-at="group.resetTime"
+          :color="group.color"
         />
 
         <div v-if="aiCreditsDisplay" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
@@ -879,12 +853,6 @@ const shouldLazyLoadOnMobile = computed(() => {
   return shouldFetchUsage.value && !isDesktopViewport.value
 })
 
-// Antigravity quota types (用于 API 返回的数据)
-interface AntigravityUsageResult {
-  utilization: number
-  resetTime: string | null
-}
-
 // ===== Antigravity quota from API (usageInfo.antigravity_quota) =====
 
 // 检查是否有从 API 获取的配额数据
@@ -892,65 +860,50 @@ const hasAntigravityQuotaFromAPI = computed(() => {
   return usageInfo.value?.antigravity_quota && Object.keys(usageInfo.value.antigravity_quota).length > 0
 })
 
-// 从 API 配额数据中获取使用率（多模型取最高使用率）
-const getAntigravityUsageFromAPI = (
-  modelNames: string[]
-): AntigravityUsageResult | null => {
-  const quota = usageInfo.value?.antigravity_quota
-  if (!quota) return null
+// Antigravity 每个模型带一份配额，实际是共享的池子：同一份配额（已用比例 + 重置
+// 时间相同）的模型合并成一行，标签按模型族给 Gemini / Claude。这样不列具体版本，
+// 上游给几个池就画几行。
+type UsageBarColor = 'indigo' | 'emerald' | 'purple' | 'amber' | 'sky' | 'rose'
+type QuotaPool = 'gemini' | 'claude' | 'shared'
 
-  let maxUtilization = 0
-  let earliestReset: string | null = null
-
-  for (const model of modelNames) {
-    const modelQuota = quota[model]
-    if (!modelQuota) continue
-
-    if (modelQuota.utilization > maxUtilization) {
-      maxUtilization = modelQuota.utilization
-    }
-    if (modelQuota.reset_time) {
-      if (!earliestReset || modelQuota.reset_time < earliestReset) {
-        earliestReset = modelQuota.reset_time
-      }
-    }
-  }
-
-  // 如果没有找到任何匹配的模型
-  if (maxUtilization === 0 && earliestReset === null) {
-    const hasAnyData = modelNames.some((m) => quota[m])
-    if (!hasAnyData) return null
-  }
-
-  return {
-    utilization: maxUtilization,
-    resetTime: earliestReset
-  }
+const QUOTA_POOL_STYLE: Record<QuotaPool, { labelKey: string; color: UsageBarColor }> = {
+  gemini: { labelKey: 'admin.accounts.usageWindow.gemini', color: 'indigo' },
+  claude: { labelKey: 'admin.accounts.usageWindow.claude', color: 'amber' },
+  shared: { labelKey: 'admin.accounts.usageWindow.sharedQuota', color: 'sky' }
 }
 
-// Gemini 3 Pro from API
-const antigravity3ProUsageFromAPI = computed(() =>
-  getAntigravityUsageFromAPI(['gemini-3-pro-low', 'gemini-3-pro-high', 'gemini-3-pro-preview'])
-)
-
-// Gemini 3 Flash from API
-const antigravity3FlashUsageFromAPI = computed(() => getAntigravityUsageFromAPI(['gemini-3-flash']))
-
-// Gemini Image from API
-const antigravity3ImageUsageFromAPI = computed(() =>
-  getAntigravityUsageFromAPI(['gemini-2.5-flash-image', 'gemini-3.1-flash-image', 'gemini-3-pro-image'])
-)
-
-// Claude from API (all Claude model variants)
-const antigravityClaudeUsageFromAPI = computed(() =>
-  getAntigravityUsageFromAPI([
-    'claude-fable-5-1',
-    'claude-fable-5',
-    'claude-sonnet-4-5', 'claude-opus-4-5-thinking',
-    'claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-6-thinking',
-    'claude-opus-4-7', 'claude-opus-4-8',
-  ])
-)
+const antigravityQuotaGroups = computed(() => {
+  const quota = usageInfo.value?.antigravity_quota
+  if (!quota) return []
+  const pools = new Map<string, { utilization: number; resetTime: string | null; families: Set<string> }>()
+  for (const [model, info] of Object.entries(quota)) {
+    const name = model.toLowerCase()
+    const family = name.startsWith('claude') ? 'claude' : name.startsWith('gemini') ? 'gemini' : null
+    // chat_*、tab_* 这类不是对话模型，面板不画。
+    if (!family) continue
+    const key = `${info.utilization}|${info.reset_time ?? ''}`
+    const pool = pools.get(key) ?? { utilization: info.utilization, resetTime: info.reset_time ?? null, families: new Set<string>() }
+    pool.families.add(family)
+    pools.set(key, pool)
+  }
+  const order: QuotaPool[] = ['gemini', 'claude', 'shared']
+  return [...pools.values()]
+    .map((pool) => {
+      const kind: QuotaPool = pool.families.size === 1 ? ([...pool.families][0] as QuotaPool) : 'shared'
+      return {
+        key: `${kind}-${pool.utilization}-${pool.resetTime ?? ''}`,
+        labelKey: QUOTA_POOL_STYLE[kind].labelKey,
+        color: QUOTA_POOL_STYLE[kind].color,
+        utilization: pool.utilization,
+        resetTime: pool.resetTime
+      }
+    })
+    .sort((a, b) => {
+      const rank = (labelKey: string) =>
+        order.findIndex((k) => QUOTA_POOL_STYLE[k].labelKey === labelKey)
+      return rank(a.labelKey) - rank(b.labelKey)
+    })
+})
 
 const aiCreditsDisplay = computed(() => {
   const credits = usageInfo.value?.ai_credits

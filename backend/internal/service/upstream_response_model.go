@@ -290,7 +290,23 @@ func upstreamModelsMatchForAudit(sentModel, responseModel string) bool {
 	// Canonicalize only for mismatch auditing; keep the raw response model for
 	// observability and for the separate response-model billing safeguards.
 	sentGrokModel := canonicalGrokBuildRuntimeModel(sentModel)
-	return sentGrokModel != "" && sentGrokModel == canonicalGrokBuildRuntimeModel(responseModel)
+	if sentGrokModel != "" && sentGrokModel == canonicalGrokBuildRuntimeModel(responseModel) {
+		return true
+	}
+
+	// Antigravity 这类网关把思考档位后缀归一成基础模型名再回包：请求
+	// gemini-4-argon-high 回 gemini-4-argon，请求 claude-opus-5-5-high 回
+	// claude-opus-5-5。档位只决定推理深度、不改单价（见 pricing_service 的
+	// 归一逻辑），两者是同一个模型，不该记成"上游响应模型不一致"。
+	return equalAfterTierNormalization(sentModel, responseModel, normalizeGeminiThinkingTierAlias) ||
+		equalAfterTierNormalization(sentModel, responseModel, normalizeAntigravityClaudeTierAlias)
+}
+
+// equalAfterTierNormalization 把两边的思考档位后缀都归一成基础模型名再比较。
+func equalAfterTierNormalization(sentModel, responseModel string, normalize func(string) string) bool {
+	sent := normalize(strings.ToLower(strings.TrimSpace(sentModel)))
+	response := normalize(strings.ToLower(strings.TrimSpace(responseModel)))
+	return sent != "" && sent == response
 }
 
 func canonicalGrokBuildRuntimeModel(model string) string {

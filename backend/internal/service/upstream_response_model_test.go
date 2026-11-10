@@ -103,6 +103,31 @@ func TestUpstreamModelMismatchTreatsGrokBuildRuntimeIDsAsAliases(t *testing.T) {
 	}
 }
 
+func TestUpstreamModelMismatchTreatsAntigravityThinkingTiersAsAliases(t *testing.T) {
+	// Antigravity 请求带思考档位后缀，响应回基础模型名。档位不影响单价
+	// （pricing_service 会把两者归一到同一张价目），不算模型不一致。
+	tests := []struct {
+		name          string
+		sentModel     string
+		responseModel string
+	}{
+		{name: "gemini 4 argon high", sentModel: "gemini-4-argon-high", responseModel: "gemini-4-argon"},
+		{name: "gemini 3.8 flash low", sentModel: "gemini-3.8-flash-low", responseModel: "gemini-3.8-flash"},
+		{name: "gemini 3.8 flash tiered", sentModel: "gemini-3.8-flash-tiered", responseModel: "gemini-3.8-flash"},
+		{name: "claude opus 5.5 high", sentModel: "claude-opus-5-5-high", responseModel: "claude-opus-5-5"},
+		{name: "claude sonnet 5.5 medium", sentModel: "claude-sonnet-5-5-medium", responseModel: "claude-sonnet-5-5"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mismatch := upstreamModelMismatch(tt.sentModel, tt.responseModel)
+
+			require.NotNil(t, mismatch)
+			require.False(t, *mismatch)
+		})
+	}
+}
+
 func TestUpstreamModelMismatchDoesNotCollapseDifferentModels(t *testing.T) {
 	tests := []struct {
 		name          string

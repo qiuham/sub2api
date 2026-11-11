@@ -568,7 +568,9 @@ describe('AccountUsageCell', () => {
 
     // An active query that bypasses the cache (an upgrade or reset shows at once).
     expect(getUsage).toHaveBeenLastCalledWith(1006, 'active', true)
-    expect(wrapper.find('.usage-bar').text()).toContain('|0|2026-11-14T21:22:49Z')
+    expect(wrapper.find('.usage-bar').text()).toContain('|0|')
+    // 一点没用的窗口：上游给的重置时间是"现在 + 窗口长度"，会一直往后推，不显示倒计时。
+    expect(wrapper.find('.usage-bar').text()).not.toContain('2026-11-14T21:22:49Z')
   })
 
   it('Antigravity 会显示 AI Credits 余额信息', async () => {

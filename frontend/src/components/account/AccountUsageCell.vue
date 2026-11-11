@@ -304,6 +304,7 @@
           :utilization="bar.utilization"
           :resets-at="bar.resetsAt"
           :color="bar.color"
+          show-now-when-idle
         />
 
         <div v-if="aiCreditsDisplay" class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">
@@ -961,7 +962,9 @@ const antigravityQuotaGroupBars = computed(() => {
         label: t(labelKey),
         title: group.name,
         utilization: Math.round(window.utilization ?? 0),
-        resetsAt: window.resets_at ?? null,
+        // 窗口一点没用时，上游把重置时间填成"现在 + 窗口长度"，每次刷新都往后推；
+        // 这个倒计时没有意义（窗口还没开始），不显示，改成"现在"可用。
+        resetsAt: (window.utilization ?? 0) > 0 ? (window.resets_at ?? null) : null,
         color
       })
     }

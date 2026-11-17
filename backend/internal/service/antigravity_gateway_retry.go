@@ -879,10 +879,19 @@ func setModelRateLimitByModelName(ctx context.Context, repo AccountRepository, a
 }
 
 func (s *AntigravityGatewayService) setAntigravityModelRateLimits(ctx context.Context, repo AccountRepository, account *Account, modelName, prefix string, statusCode int, resetAt time.Time, afterSmartRetry bool) bool {
+	return s.setAntigravityModelRateLimitsScoped(ctx, repo, account, modelName, prefix, statusCode, resetAt, afterSmartRetry, true)
+}
+
+// setAntigravityModelRateLimitsScoped 同 setAntigravityModelRateLimits；familyScope=false 时只停这一个模型，
+// 不写 antigravity:gemini 这类家族键。
+func (s *AntigravityGatewayService) setAntigravityModelRateLimitsScoped(ctx context.Context, repo AccountRepository, account *Account, modelName, prefix string, statusCode int, resetAt time.Time, afterSmartRetry, familyScope bool) bool {
 	if account == nil || repo == nil {
 		return false
 	}
 	keys := antigravityModelRateLimitKeys(account, modelName)
+	if !familyScope && len(keys) > 1 {
+		keys = keys[:1]
+	}
 	if len(keys) == 0 {
 		return false
 	}
@@ -1248,7 +1257,11 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 		}
 		if modelKey != "" {
 			ra := s.resolveResetTime(resetAt, defaultDur)
-			if !s.setAntigravityModelRateLimits(ctx, s.accountRepo, account, modelKey, prefix, statusCode, ra, false) {
+			// 回复里没带任何额度原因（ErrorInfo.reason / RetryInfo）的 429，不一定是额度用完：
+			// 例如 Google 对某些请求内容也回同样的 "Resource has been exhausted"。
+			// 这种只停这一个模型，不连带整个 Gemini 家族，免得一个请求把所有会话都拖成 503。
+			familyScope := antigravity429HasQuotaDetails(body)
+			if !s.setAntigravityModelRateLimitsScoped(ctx, s.accountRepo, account, modelKey, prefix, statusCode, ra, false, familyScope) {
 				logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 model_rate_limit_set_failed model=%s", prefix, modelKey)
 			} else {
 				logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 model_rate_limited model=%s account=%d reset_at=%v reset_in=%v",
@@ -1295,4 +1308,20 @@ func (s *AntigravityGatewayService) resolveResetTime(resetAt *int64, defaultDur 
 		return time.Unix(*resetAt, 0)
 	}
 	return time.Now().Add(defaultDur)
+}
+
+// antigravity429HasQuotaDetails 429 回复里有没有附带说明（error.details 非空）。
+// Google 真的额度/速率用完时会在 details 里带原因、等待时间或恢复时刻（RATE_LIMIT_EXCEEDED、
+// retryDelay、metadata.quotaResetDelay 等，写法不止一种），这种照旧连家族一起停。
+// 只有 details 为空的光秃秃 429（只有一句 "Resource has been exhausted"）返回 false。
+func antigravity429HasQuotaDetails(body []byte) bool {
+	var payload struct {
+		Error struct {
+			Details []json.RawMessage `json:"details"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return true // 读不懂就按原来的保守做法：连家族一起停
+	}
+	return len(payload.Error.Details) > 0
 }

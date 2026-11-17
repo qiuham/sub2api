@@ -1322,3 +1322,44 @@ func TestNormalizeAntigravityModelName(t *testing.T) {
 		})
 	}
 }
+
+// 光秃秃的 429（只有一句 "Resource has been exhausted"，没有 details）只停这一个模型，不连带 Gemini 家族。
+// 这种 429 可能是 Google 对请求内容的反应，不一定是额度用完。
+func TestHandleUpstreamError_429_BareBody_OnlyModelScope(t *testing.T) {
+	repo := &stubAntigravityAccountRepo{}
+	svc := &AntigravityGatewayService{accountRepo: repo}
+	account := &Account{ID: 30, Name: "acc-30", Platform: PlatformAntigravity}
+
+	body := []byte(`{"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).", "status": "RESOURCE_EXHAUSTED"}}`)
+	result := svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, http.Header{}, body, "gemini-3-flash", 0, "", false)
+
+	require.Nil(t, result)
+	require.Len(t, repo.modelRateLimitCalls, 1)
+	require.NotEqual(t, antigravityGeminiModelRateLimitKey, repo.modelRateLimitCalls[0].modelKey)
+}
+
+// 带了额度原因的 429 照旧连家族一起停：Ultra 号的 Gemini 文字模型共用额度，换模型也一样会 429。
+func TestHandleUpstreamError_429_WithQuotaDetails_KeepsFamilyScope(t *testing.T) {
+	repo := &stubAntigravityAccountRepo{}
+	svc := &AntigravityGatewayService{accountRepo: repo}
+	account := &Account{ID: 31, Name: "acc-31", Platform: PlatformAntigravity}
+
+	body := buildGeminiRateLimitBody("5s")
+	result := svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, http.Header{}, body, "gemini-3-flash", 0, "", false)
+
+	require.Nil(t, result)
+	keys := []string{}
+	for _, call := range repo.modelRateLimitCalls {
+		keys = append(keys, call.modelKey)
+	}
+	require.Contains(t, keys, antigravityGeminiModelRateLimitKey)
+}
+
+func TestAntigravity429HasQuotaDetails(t *testing.T) {
+	require.False(t, antigravity429HasQuotaDetails([]byte(`{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED"}}`)))
+	require.False(t, antigravity429HasQuotaDetails([]byte(`{"error":{"code":429,"details":[]}}`)))
+	require.True(t, antigravity429HasQuotaDetails(buildGeminiRateLimitBody("5s")))
+	require.True(t, antigravity429HasQuotaDetails([]byte(`{"error":{"details":[{"reason":"QUOTA_EXHAUSTED"}]}}`)))
+	require.True(t, antigravity429HasQuotaDetails([]byte(`{"error":{"details":[{"retryDelay":"30s"}]}}`)))
+	require.True(t, antigravity429HasQuotaDetails([]byte(`not json`)))
+}

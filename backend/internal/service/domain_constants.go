@@ -450,6 +450,8 @@ const (
 	// Request identity patch (Claude -> Gemini systemInstruction injection)
 	SettingKeyEnableIdentityPatch = "enable_identity_patch"
 	SettingKeyIdentityPatchPrompt = "identity_patch_prompt"
+	// SettingKeySystemPromptStripPatterns 转发前从系统提示里删掉的句子（正则 JSON 列表）；没有这一项用内置默认，"[]" 表示关闭
+	SettingKeySystemPromptStripPatterns = "system_prompt_strip_patterns"
 
 	// =========================
 	// Ops Monitoring (vNext)

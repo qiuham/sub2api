@@ -50,7 +50,11 @@ func normalizeDeepSeekInlineToolDefinitions(body []byte) ([]byte, bool, error) {
 			return v
 		}
 	}
-	root = walk(root).(map[string]any)
+	walked, ok := walk(root).(map[string]any)
+	if !ok {
+		return body, false, nil
+	}
+	root = walked
 	if len(definitions) == 0 {
 		return body, false, nil
 	}

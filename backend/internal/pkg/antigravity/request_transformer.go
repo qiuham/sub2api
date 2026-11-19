@@ -735,6 +735,21 @@ func carbonThinkingConfig(req *ClaudeRequest, bareModel bool) *GeminiThinkingCon
 	return cfg
 }
 
+// geminiTierThinkingLevel 从 Gemini 模型名的档位后缀取思考档位：
+// gemini-4-hydrogen-high → "HIGH"。没有后缀或不是 Gemini 模型时返回空串。
+func geminiTierThinkingLevel(model string) string {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	if !strings.HasPrefix(m, "gemini-") {
+		return ""
+	}
+	for _, tier := range []string{"low", "medium", "high"} {
+		if strings.HasSuffix(m, "-"+tier) {
+			return strings.ToUpper(tier)
+		}
+	}
+	return ""
+}
+
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 	maxLimit := maxOutputTokensLimit(req.Model)
 	config := &GeminiGenerationConfig{
@@ -751,8 +766,8 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 		config.MaxOutputTokens = req.MaxTokens
 	}
 
-	// Carbon accepts thinking levels rather than token budgets. Tiered IDs, when
-	// supplied by the account catalog, already select the level upstream.
+	// Carbon accepts thinking levels rather than token budgets. Tiered IDs get
+	// their level from the suffix below (geminiTierThinkingLevel).
 	carbonModel := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(req.Model)), "models/")
 	isCarbon := carbonModel == "gemini-4-carbon" || carbonModel == "gemini-4-carbon-low" || carbonModel == "gemini-4-carbon-medium" || carbonModel == "gemini-4-carbon-high"
 	if isCarbon {
@@ -790,6 +805,16 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 			}
 		}
 		config.ThinkingConfig.ThinkingBudget = budget
+	}
+
+	// 带档位后缀的 Gemini 模型（例如 gemini-4-hydrogen-high）按后缀发 thinkingLevel，
+	// 和官方客户端一致；不发 thinkingBudget。
+	if level := geminiTierThinkingLevel(req.Model); level != "" {
+		if config.ThinkingConfig == nil {
+			config.ThinkingConfig = &GeminiThinkingConfig{}
+		}
+		config.ThinkingConfig.ThinkingLevel = level
+		config.ThinkingConfig.ThinkingBudget = 0
 	}
 
 	if config.MaxOutputTokens > maxLimit {

@@ -44,16 +44,29 @@ func TestCarbonGenerationThinkingLevels(t *testing.T) {
 	}
 }
 
-func TestCarbonTierPreservesUpstreamSelection(t *testing.T) {
-	for _, tier := range []string{"low", "medium", "high"} {
-		cfg := buildGenerationConfig(&ClaudeRequest{Model: "gemini-4-carbon-" + tier, Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 32768}, OutputConfig: &ClaudeOutputConfig{Effort: "low"}})
-		require.NotNil(t, cfg.ThinkingConfig)
-		require.True(t, cfg.ThinkingConfig.IncludeThoughts)
-		require.Empty(t, cfg.ThinkingConfig.ThinkingLevel)
-		require.Zero(t, cfg.ThinkingConfig.ThinkingBudget)
+func TestGeminiTierSuffixSelectsThinkingLevel(t *testing.T) {
+	for _, base := range []string{"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-argon"} {
+		for tier, level := range map[string]string{"low": "LOW", "medium": "MEDIUM", "high": "HIGH"} {
+			cfg := buildGenerationConfig(&ClaudeRequest{Model: base + "-" + tier, Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 32768}, OutputConfig: &ClaudeOutputConfig{Effort: "low"}})
+			require.NotNil(t, cfg.ThinkingConfig, base+"-"+tier)
+			require.True(t, cfg.ThinkingConfig.IncludeThoughts)
+			require.Equal(t, level, cfg.ThinkingConfig.ThinkingLevel)
+			data, err := json.Marshal(cfg)
+			require.NoError(t, err)
+			require.NotContains(t, string(data), "thinkingBudget")
+		}
 	}
-	// Other models retain the existing budget behavior.
-	cfg := buildGenerationConfig(&ClaudeRequest{Model: "claude-sonnet-4-6", Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 4096}})
+	// 档位由模型名决定：请求关了思考也照样发档位，只是不要思考内容。
+	cfg := buildGenerationConfig(&ClaudeRequest{Model: "gemini-4-hydrogen-high"})
+	require.NotNil(t, cfg.ThinkingConfig)
+	require.False(t, cfg.ThinkingConfig.IncludeThoughts)
+	require.Equal(t, "HIGH", cfg.ThinkingConfig.ThinkingLevel)
+	// 不带后缀的 Gemini 模型保持原来的动态预算。
+	cfg = buildGenerationConfig(&ClaudeRequest{Model: "gemini-4-hydrogen", Thinking: &ThinkingConfig{Type: "adaptive"}})
+	require.Equal(t, -1, cfg.ThinkingConfig.ThinkingBudget)
+	require.Empty(t, cfg.ThinkingConfig.ThinkingLevel)
+	// 不是 Gemini 的模型不受影响。
+	cfg = buildGenerationConfig(&ClaudeRequest{Model: "claude-sonnet-4-6", Thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 4096}})
 	require.Equal(t, 4096, cfg.ThinkingConfig.ThinkingBudget)
 	require.Empty(t, cfg.ThinkingConfig.ThinkingLevel)
 }

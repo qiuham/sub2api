@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
@@ -1323,19 +1324,39 @@ func TestNormalizeAntigravityModelName(t *testing.T) {
 	}
 }
 
-// 光秃秃的 429（只有一句 "Resource has been exhausted"，没有 details）只停这一个模型，不连带 Gemini 家族。
-// 这种 429 可能是 Google 对请求内容的反应，不一定是额度用完。
-func TestHandleUpstreamError_429_BareBody_OnlyModelScope(t *testing.T) {
-	repo := &stubAntigravityAccountRepo{}
-	svc := &AntigravityGatewayService{accountRepo: repo}
-	account := &Account{ID: 30, Name: "acc-30", Platform: PlatformAntigravity}
-
+// 光秃秃的 429（只有一句 "Resource has been exhausted"，没有 details）：默认不锁模型，直接把 429 交给客户端重试。
+// 设了 antigravity_unexplained_429_cooldown_seconds 才锁，而且只锁这一个模型，不连带 Gemini 家族。
+func TestHandleUpstreamError_429_BareBody_CooldownFromSetting(t *testing.T) {
 	body := []byte(`{"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).", "status": "RESOURCE_EXHAUSTED"}}`)
-	result := svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, http.Header{}, body, "gemini-3-flash", 0, "", false)
+	for _, tc := range []struct {
+		name   string
+		values map[string]string
+		lock   time.Duration
+	}{
+		{"no setting", nil, 0},
+		{"zero", map[string]string{SettingKeyAntigravityUnexplained429CooldownSeconds: "0"}, 0},
+		{"invalid", map[string]string{SettingKeyAntigravityUnexplained429CooldownSeconds: "abc"}, 0},
+		{"five seconds", map[string]string{SettingKeyAntigravityUnexplained429CooldownSeconds: "5"}, 5 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			antigravity429Cooldown = unexplained429CooldownCache{}
+			defer func() { antigravity429Cooldown = unexplained429CooldownCache{} }()
+			repo := &stubAntigravityAccountRepo{}
+			svc := &AntigravityGatewayService{accountRepo: repo, settingService: NewSettingService(&adminComplianceRepoStub{values: tc.values}, &config.Config{})}
+			account := &Account{ID: 30, Name: "acc-30", Platform: PlatformAntigravity}
 
-	require.Nil(t, result)
-	require.Len(t, repo.modelRateLimitCalls, 1)
-	require.NotEqual(t, antigravityGeminiModelRateLimitKey, repo.modelRateLimitCalls[0].modelKey)
+			start := time.Now()
+			result := svc.handleUpstreamError(context.Background(), "[test]", account, http.StatusTooManyRequests, http.Header{}, body, "gemini-3-flash", 0, "", false)
+			require.Nil(t, result)
+			if tc.lock == 0 {
+				require.Empty(t, repo.modelRateLimitCalls)
+				return
+			}
+			require.Len(t, repo.modelRateLimitCalls, 1)
+			require.NotEqual(t, antigravityGeminiModelRateLimitKey, repo.modelRateLimitCalls[0].modelKey)
+			require.WithinDuration(t, start.Add(tc.lock), repo.modelRateLimitCalls[0].resetAt, 2*time.Second)
+		})
+	}
 }
 
 // 带了额度原因的 429 照旧连家族一起停：Ultra 号的 Gemini 文字模型共用额度，换模型也一样会 429。

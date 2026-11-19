@@ -1261,6 +1261,16 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 			// 例如 Google 对某些请求内容也回同样的 "Resource has been exhausted"。
 			// 这种只停这一个模型，不连带整个 Gemini 家族，免得一个请求把所有会话都拖成 503。
 			familyScope := antigravity429HasQuotaDetails(body)
+			if !familyScope {
+				// 没带说明的 429 多半是 Google 一时没有算力，几秒后就好。只有一个号能用时，
+				// 锁住模型只会把客户端的每次重试都挡成 503。锁多久由设置决定，默认 0 = 不锁，直接把 429 交给客户端重试。
+				cooldown := s.settingService.AntigravityUnexplained429Cooldown(ctx)
+				if cooldown <= 0 {
+					logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 unexplained_not_locked model=%s account=%d", prefix, modelKey, account.ID)
+					return nil
+				}
+				ra = time.Now().Add(cooldown)
+			}
 			if !s.setAntigravityModelRateLimitsScoped(ctx, s.accountRepo, account, modelKey, prefix, statusCode, ra, false, familyScope) {
 				logger.LegacyPrintf("service.antigravity_gateway", "%s status=429 model_rate_limit_set_failed model=%s", prefix, modelKey)
 			} else {

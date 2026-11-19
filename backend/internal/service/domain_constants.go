@@ -452,6 +452,8 @@ const (
 	SettingKeyIdentityPatchPrompt = "identity_patch_prompt"
 	// SettingKeySystemPromptStripPatterns 转发前从系统提示里删掉的句子（正则 JSON 列表）；没有这一项用内置默认，"[]" 表示关闭
 	SettingKeySystemPromptStripPatterns = "system_prompt_strip_patterns"
+	// SettingKeyAntigravityUnexplained429CooldownSeconds Antigravity 回的 429 没带额度说明（error.details 为空）时，锁这个模型多少秒；没有这一项或 0 = 不锁
+	SettingKeyAntigravityUnexplained429CooldownSeconds = "antigravity_unexplained_429_cooldown_seconds"
 
 	// =========================
 	// Ops Monitoring (vNext)
